@@ -4,11 +4,100 @@ import glob
 import os
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
+from xgboost import XGBClassifier
 from utils import (
     calculate_streak, 
     calculate_tie_stats, 
     load_all_games
 )
+
+# ==========================================
+# New Advanced Feature Functions
+# ==========================================
+
+def calculate_momentum(history, window=10):
+    """คำนวณ momentum (การเปลี่ยนแปลงของ P/B ratio)"""
+    non_tie = [h for h in history if h != 2]
+    if len(non_tie) < window * 2:
+        return 0.0
+    
+    recent = non_tie[-window:]
+    previous = non_tie[-(window*2):-window]
+    
+    recent_b_ratio = recent.count(1) / len(recent)
+    prev_b_ratio = previous.count(1) / len(previous)
+    
+    # Momentum: positive = banker trending, negative = player trending
+    return recent_b_ratio - prev_b_ratio
+
+def calculate_alternating_ratio(history, window=10):
+    """คำนวณสัดส่วนการสลับ P-B-P-B ใน window ล่าสุด"""
+    non_tie = [h for h in history if h != 2]
+    if len(non_tie) < 2:
+        return 0.5
+    
+    last_n = non_tie[-window:] if len(non_tie) >= window else non_tie
+    if len(last_n) < 2:
+        return 0.5
+    
+    switches = 0
+    for i in range(1, len(last_n)):
+        if last_n[i] != last_n[i-1]:
+            switches += 1
+    
+    return switches / (len(last_n) - 1)
+
+def get_position_phase(current_index, total_expected=70):
+    """ระบุ phase ของ shoe (0=early, 1=mid, 2=late)"""
+    ratio = current_index / total_expected
+    if ratio < 0.3:
+        return 0  # Early
+    elif ratio < 0.7:
+        return 1  # Mid
+    else:
+        return 2  # Late
+
+def calculate_streak_break_frequency(history, min_streak=3):
+    """คำนวณความถี่ที่ streak ยาวๆ ถูกตัด"""
+    non_tie = [h for h in history if h != 2]
+    if len(non_tie) < 5:
+        return 0.5
+    
+    long_streaks = 0
+    broken_streaks = 0
+    current_streak = 1
+    
+    for i in range(1, len(non_tie)):
+        if non_tie[i] == non_tie[i-1]:
+            current_streak += 1
+        else:
+            if current_streak >= min_streak:
+                long_streaks += 1
+                broken_streaks += 1
+            current_streak = 1
+    
+    # Check if current streak is long (not broken yet)
+    if current_streak >= min_streak:
+        long_streaks += 1
+    
+    return broken_streaks / long_streaks if long_streaks > 0 else 0.5
+
+def count_consecutive_pairs(history, window=20):
+    """นับจำนวน PP และ BB pairs ใน history"""
+    non_tie = [h for h in history if h != 2]
+    last_n = non_tie[-window:] if len(non_tie) >= window else non_tie
+    
+    pp_count = 0
+    bb_count = 0
+    
+    for i in range(1, len(last_n)):
+        if last_n[i] == 0 and last_n[i-1] == 0:
+            pp_count += 1
+        elif last_n[i] == 1 and last_n[i-1] == 1:
+            bb_count += 1
+    
+    total_pairs = len(last_n) - 1 if len(last_n) > 1 else 1
+    return pp_count / total_pairs, bb_count / total_pairs
 
 def build_big_road_columns(history):
     """สร้างโครงสร้างคอลัมน์ของ Big Road"""
@@ -273,6 +362,13 @@ def process_data_from_folder(folder_path):
                         'gap_since_tie': min(gap_since_tie, 30),
                         'is_stable': derived_features['is_stable'],
                         'overall_stability': derived_features['overall_stability'],
+                        # New Advanced Features
+                        'position_phase': get_position_phase(i),
+                        'momentum': calculate_momentum(history),
+                        'alternating_ratio': calculate_alternating_ratio(history),
+                        'streak_break_freq': calculate_streak_break_frequency(history),
+                        'pp_ratio': count_consecutive_pairs(history)[0],
+                        'bb_ratio': count_consecutive_pairs(history)[1],
                         'target': target
                     }
                     data_rows.append(row)
@@ -288,17 +384,36 @@ def process_data_from_folder(folder_path):
     return pd.DataFrame(data_rows), pattern_sequences
 
 def train_ensemble_models(df, pattern_sequences):
-    """Train both RF and KNN models"""
+    """Train RF, KNN, and XGBoost models"""
     models = {}
     
     if not df.empty:
         X = df.drop(columns=['target'])
         y = df['target']
+        
+        # Module C: Random Forest (Statistician)
         rf_model = RandomForestClassifier(n_estimators=150, max_depth=7, random_state=42)
         rf_model.fit(X, y)
         models['rf'] = rf_model
         models['rf_features'] = list(X.columns)
         
+        # Module E: XGBoost (Booster) - New!
+        try:
+            xgb_model = XGBClassifier(
+                n_estimators=100, 
+                max_depth=5, 
+                learning_rate=0.1,
+                objective='multi:softprob',
+                num_class=3,
+                random_state=42,
+                verbosity=0
+            )
+            xgb_model.fit(X, y)
+            models['xgb'] = xgb_model
+        except Exception as e:
+            print(f"XGBoost training failed: {e}")
+        
+        # Module A: KNN (Historian)
         if pattern_sequences:
             knn_X = np.array([p['pattern'] for p in pattern_sequences])
             knn_y = np.array([p['target'] for p in pattern_sequences])
@@ -375,7 +490,14 @@ def ensemble_predict(history, models, module_performance=None, st_session_state=
                 'tie_rate_20': tie_rate,
                 'gap_since_tie': min(gap_since_tie, 30),
                 'is_stable': derived_features['is_stable'],
-                'overall_stability': derived_features['overall_stability']
+                'overall_stability': derived_features['overall_stability'],
+                # New Advanced Features
+                'position_phase': get_position_phase(len(history)),
+                'momentum': calculate_momentum(history),
+                'alternating_ratio': calculate_alternating_ratio(history),
+                'streak_break_freq': calculate_streak_break_frequency(history),
+                'pp_ratio': count_consecutive_pairs(history)[0],
+                'bb_ratio': count_consecutive_pairs(history)[1]
             }])
             
             rf_pred = models['rf'].predict(input_data)[0]
@@ -389,6 +511,62 @@ def ensemble_predict(history, models, module_performance=None, st_session_state=
             
             vote_text = 'PLAYER' if rf_pred == 0 else ('BANKER' if rf_pred == 1 else 'TIE')
             vote_details['statistician'] = {'vote': vote_text, 'conf': rf_conf, 'emoji': '🧠'}
+    
+    # Module E: XGBoost (Booster) - New!
+    if 'xgb' in models:
+        if len(history) >= 5:
+            p1, p2, p3, p4, p5 = history[-5:]
+            derived_features = get_derived_roads_features(history)
+            current_streak = calculate_streak(history)
+            tie_rate, gap_since_tie = calculate_tie_stats(history, 20)
+            last_10 = [h for h in history[-10:] if h != 2]
+            b_ratio = last_10.count(1) / len(last_10) if last_10 else 0.5
+            
+            last_20 = [h for h in history[-20:] if h != 2]
+            p_rate_20 = last_20.count(0) / len(last_20) if last_20 else 0.5
+            b_rate_20 = last_20.count(1) / len(last_20) if last_20 else 0.5
+            
+            streak_owner = 0.5
+            non_tie_hist_local = [h for h in history if h != 2]
+            if len(non_tie_hist_local) >= 2:
+                if non_tie_hist_local[-1] == 0: streak_owner = 0
+                elif non_tie_hist_local[-1] == 1: streak_owner = 1
+
+            xgb_input = pd.DataFrame([{
+                'pattern_1': p1, 'pattern_2': p2, 'pattern_3': p3,
+                'pattern_4': p4, 'pattern_5': p5,
+                'current_streak': min(current_streak, 10),
+                'streak_owner': streak_owner,
+                'banker_trend': b_ratio,
+                'player_rate_20': p_rate_20,
+                'banker_rate_20': b_rate_20,
+                'tie_rate_20': tie_rate,
+                'gap_since_tie': min(gap_since_tie, 30),
+                'is_stable': derived_features['is_stable'],
+                'overall_stability': derived_features['overall_stability'],
+                'position_phase': get_position_phase(len(history)),
+                'momentum': calculate_momentum(history),
+                'alternating_ratio': calculate_alternating_ratio(history),
+                'streak_break_freq': calculate_streak_break_frequency(history),
+                'pp_ratio': count_consecutive_pairs(history)[0],
+                'bb_ratio': count_consecutive_pairs(history)[1]
+            }])
+            
+            try:
+                xgb_pred = models['xgb'].predict(xgb_input)[0]
+                xgb_proba = models['xgb'].predict_proba(xgb_input)[0]
+                xgb_conf = max(xgb_proba) * 100
+                
+                # XGBoost gets weight of 1.5 (between RF and KNN)
+                if xgb_conf > 50:
+                    if xgb_pred == 0: votes['player'] += 1.5
+                    elif xgb_pred == 1: votes['banker'] += 1.5
+                    elif xgb_pred == 2: votes['tie'] += 2
+                
+                xgb_vote_text = 'PLAYER' if xgb_pred == 0 else ('BANKER' if xgb_pred == 1 else 'TIE')
+                vote_details['booster'] = {'vote': xgb_vote_text, 'conf': xgb_conf, 'emoji': '⚡'}
+            except Exception as e:
+                print(f"XGBoost prediction error: {e}")
     
     # Module D: Expert
     if 'patterns' in models and models['patterns']:

@@ -14,7 +14,8 @@ from utils import (
     load_custom_patterns, 
     calculate_streak, 
     calculate_tie_stats,
-    save_game_data
+    save_game_data,
+    mine_patterns
 )
 from ui_components import (
     render_big_road, 
@@ -50,11 +51,11 @@ with st.sidebar:
         st.session_state['last_prediction'] = None
     if 'module_performance' not in st.session_state:
         st.session_state['module_performance'] = {
-            'historian': 0, 'technician': 0, 'statistician': 0, 'expert': 0
+            'historian': 0, 'technician': 0, 'statistician': 0, 'booster': 0, 'expert': 0
         }
     if 'module_stats' not in st.session_state:
         st.session_state['module_stats'] = {
-            k: {'wins': 0, 'total': 0, 'score': 0} for k in ['historian', 'technician', 'statistician', 'expert']
+            k: {'wins': 0, 'total': 0, 'score': 0} for k in ['historian', 'technician', 'statistician', 'booster', 'expert']
         }
     if 'last_vote_details' not in st.session_state:
         st.session_state['last_vote_details'] = {}
@@ -66,7 +67,7 @@ with st.sidebar:
         st.session_state['streak_count'] = 0
 
     if st.button("🔄 โหลดข้อมูล & เทรน Ensemble", use_container_width=True):
-        with st.spinner("กำลังเทรน AI 4 ตัว..."):
+        with st.spinner("กำลังเทรน AI 5 ตัว (RF, XGBoost, KNN...)..."):
             try:
                 df, pattern_sequences = process_data_from_folder(data_path)
                 
@@ -129,6 +130,17 @@ with st.sidebar:
         else:
              show_stats_modal(patterns, data_path)
 
+    # Auto Pattern Mining Button
+    st.markdown("---")
+    if st.button("⛏️ Auto Mine Patterns", use_container_width=True):
+        with st.spinner("กำลังวิเคราะห์หา Pattern ใหม่..."):
+            discovered, message = mine_patterns(data_path, "./pattern")
+            if discovered:
+                st.success(f"✅ {message}")
+                st.info(f"บันทึกแล้วที่ ./pattern | Top Win Rate: {discovered[0]['win_rate']*100:.1f}%")
+            else:
+                st.warning(message)
+
     st.divider()
     
     st.subheader("⚡ Risk Level")
@@ -147,7 +159,7 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🎨 ตั้งค่าสีตาราง")
-    theme_choice = st.radio("Theme", ["ตารางสีมืด 🌙", "ตารางสีสว่าง ☀️"], index=0, horizontal=True, label_visibility="collapsed")
+    theme_choice = st.radio("Theme", ["ตารางสีมืด 🌙", "ตารางสีสว่าง ☀️"], index=1, horizontal=True, label_visibility="collapsed")
     st.session_state['theme'] = 'dark' if "ตารางสีมืด" in theme_choice else 'light'
     
     st.divider()
@@ -219,7 +231,7 @@ with col1:
         if st.session_state.get('last_vote_details'):
             details = st.session_state['last_vote_details']
             perf = st.session_state['module_performance']
-            for name in ['historian', 'technician', 'statistician', 'expert']:
+            for name in ['historian', 'technician', 'statistician', 'booster', 'expert']:
                 mod_data = details.get(name)
                 if mod_data and 'vote' in mod_data:
                     vote_val = 0 if mod_data['vote'] == 'PLAYER' else (1 if mod_data['vote'] == 'BANKER' else None)
@@ -231,7 +243,7 @@ with col1:
             # Update detailed Stats (Win Rate per Module)
             if 'module_stats' in st.session_state:
                 stats = st.session_state['module_stats']
-                for name in ['historian', 'technician', 'statistician', 'expert']:
+                for name in ['historian', 'technician', 'statistician', 'booster', 'expert']:
                     mod_data = details.get(name)
                     if mod_data and 'vote' in mod_data:
                         v = mod_data['vote']
@@ -313,7 +325,7 @@ with col2:
     if mod_perf:
         st.caption("🧠 AI Thinking Process:")
         item_html = ""
-        emojis = {'historian': '📜', 'technician': '🛣️', 'statistician': '🧠', 'expert': '🎲'}
+        emojis = {'historian': '📜', 'technician': '🛣️', 'statistician': '🧠', 'booster': '⚡', 'expert': '🎲'}
         for k, v in mod_perf.items():
             color = "green" if v > 0 else ("red" if v < 0 else "gray")
             item_html += f'<div class="flex-item">{emojis.get(k)}<br><span style="color:{color}; font-weight:bold">{v:+d}</span></div>'

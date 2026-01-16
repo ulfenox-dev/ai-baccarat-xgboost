@@ -96,8 +96,89 @@ def save_game_data(history, data_folder="./data"):
     filename = f"game_{timestamp}.txt"
     filepath = os.path.join(data_folder, filename)
     
-    data_str = ", ".join(str(x) for x in history)
+    data_str = ",".join(str(x) for x in history) + ","
     with open(filepath, 'w') as f:
         f.write(data_str)
     
     return filename
+
+def mine_patterns(data_folder="./data", pattern_folder="./pattern", 
+                  min_occurrences=5, min_win_rate=0.55, pattern_lengths=[3, 4, 5]):
+    """
+    Auto-discover high win-rate patterns from historical data.
+    Returns list of discovered patterns and saves them to pattern_folder.
+    """
+    all_games = load_all_games(data_folder)
+    if not all_games:
+        return [], "No games found in data folder"
+    
+    # Dictionary to track pattern statistics
+    # pattern_stats[pattern_tuple] = {'next_p': count, 'next_b': count}
+    pattern_stats = {}
+    
+    # Analyze all games
+    for game in all_games:
+        non_tie = [h for h in game if h != 2]
+        for pat_len in pattern_lengths:
+            for i in range(len(non_tie) - pat_len):
+                pattern = tuple(non_tie[i:i+pat_len])
+                next_result = non_tie[i + pat_len]
+                
+                if pattern not in pattern_stats:
+                    pattern_stats[pattern] = {'next_p': 0, 'next_b': 0, 'total': 0}
+                
+                pattern_stats[pattern]['total'] += 1
+                if next_result == 0:
+                    pattern_stats[pattern]['next_p'] += 1
+                elif next_result == 1:
+                    pattern_stats[pattern]['next_b'] += 1
+    
+    # Filter patterns with high win rate
+    discovered_patterns = []
+    for pattern, stats in pattern_stats.items():
+        total = stats['total']
+        if total < min_occurrences:
+            continue
+        
+        p_rate = stats['next_p'] / total
+        b_rate = stats['next_b'] / total
+        
+        if p_rate >= min_win_rate:
+            discovered_patterns.append({
+                'pattern': list(pattern),
+                'expected': 0,  # PLAYER
+                'win_rate': p_rate,
+                'occurrences': total,
+                'name': 'auto_mined'
+            })
+        elif b_rate >= min_win_rate:
+            discovered_patterns.append({
+                'pattern': list(pattern),
+                'expected': 1,  # BANKER
+                'win_rate': b_rate,
+                'occurrences': total,
+                'name': 'auto_mined'
+            })
+    
+    # Sort by win rate (highest first)
+    discovered_patterns.sort(key=lambda x: x['win_rate'], reverse=True)
+    
+    # Limit to top 50 patterns
+    discovered_patterns = discovered_patterns[:50]
+    
+    # Save to pattern folder
+    if discovered_patterns:
+        os.makedirs(pattern_folder, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filepath = os.path.join(pattern_folder, f"auto_mined_{timestamp}.txt")
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write("# Auto-mined patterns\n")
+            f.write(f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"# Min occurrences: {min_occurrences}, Min win rate: {min_win_rate}\n\n")
+            
+            for p in discovered_patterns:
+                pattern_str = ','.join(str(x) for x in p['pattern'])
+                f.write(f"{pattern_str}={p['expected']}\n")
+    
+    return discovered_patterns, f"Found {len(discovered_patterns)} high win-rate patterns"

@@ -280,7 +280,7 @@ def show_validation_panel(module_stats, shoe_type_info):
     best_rate = -1
     
     rows = []
-    emojis = {'historian': '📜', 'technician': '🛣️', 'statistician': '🧠', 'expert': '🎲'}
+    emojis = {'historian': '📜', 'technician': '🛣️', 'statistician': '🧠', 'booster': '⚡', 'expert': '🎲'}
     
     for mod, stats in module_stats.items():
         total = stats['total']
