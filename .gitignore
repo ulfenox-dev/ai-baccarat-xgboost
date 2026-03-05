@@ -1,0 +1,15 @@
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Streamlit
+.streamlit/
+
+# Local data / user patterns (Keep patterns if you want them on the web, but usually ignore data recordings)
+# If you want your custom patterns to be on the website, DO NOT ignore the 'pattern' folder.
+# We will keep 'pattern' out of ignore so the gallery works on deploy.
+data/*.txt
+!data/sample_shoe_1.txt
