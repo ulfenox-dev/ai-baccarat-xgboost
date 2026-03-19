@@ -155,19 +155,19 @@ def show_performance_dashboard(stats, streak, p_pct, b_pct):
     st.markdown(f"""
     <div style="background:#2d2d44; padding:15px; border-radius:12px; margin-bottom:15px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); border: 1px solid #444;">
         <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 10px; margin-bottom:15px; text-align:center;">
-            <div><div style="color:#4CAF50; font-weight:bold; font-size:16px;">{wins}</div><div style="font-size:10px; opacity:0.6;">WIN</div></div>
-            <div><div style="color:#f44336; font-weight:bold; font-size:16px;">{losses}</div><div style="font-size:10px; opacity:0.6;">LOSS</div></div>
-            <div><div style="color:#FFC107; font-weight:bold; font-size:16px;">{streak}</div><div style="font-size:10px; opacity:0.6;">STREAK</div></div>
-            <div><div style="color:#00BCD4; font-weight:bold; font-size:16px;">{win_rate:.0f}%</div><div style="font-size:10px; opacity:0.6;">RATE</div></div>
+            <div><div style="color:#4CAF50; font-weight:bold; font-size:22px;">{wins}</div><div style="font-size:12px; opacity:0.8;">ชนะ</div></div>
+            <div><div style="color:#f44336; font-weight:bold; font-size:22px;">{losses}</div><div style="font-size:10px; opacity:0.8;">แพ้</div></div>
+            <div><div style="color:#FFC107; font-weight:bold; font-size:22px;">{streak}</div><div style="font-size:12px; opacity:0.8;">ต่อเนื่อง</div></div>
+            <div><div style="color:#00BCD4; font-weight:bold; font-size:22px;">{win_rate:.0f}%</div><div style="font-size:12px; opacity:0.8;">อัตราชนะ</div></div>
         </div>
         <div style="display:flex; height:8px; border-radius:4px; overflow:hidden; background:#333;">
             <div style="width:{p_pct}%; background:#2196F3;"></div>
             <div style="width:{b_pct}%; background:#f44336;"></div>
         </div>
         </div>
-        <div style="display:flex; justify-content:space-between; margin-top:5px; font-size:10px;">
-            <span style="color:#2196F3">PLAYER {p_pct:.0f}%</span>
-            <span style="color:#f44336">BANKER {b_pct:.0f}%</span>
+        <div style="display:flex; justify-content:space-between; margin-top:5px; font-size:12px; font-weight:bold;">
+            <span style="color:#2196F3">น้ำเงิน {p_pct:.0f}%</span>
+            <span style="color:#f44336">แดง {b_pct:.0f}%</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -266,7 +266,7 @@ def show_validation_panel(module_stats, shoe_type_info):
     st.markdown(f"""
 <div style="background:rgba(255,255,255,0.05); padding:10px; border-radius:10px; border:1px solid #444; margin-bottom:15px;">
     <div style="display:flex; justify-content:space-between; align-items:center;">
-            <div style="color:#aaa; font-size:12px;">SHOE TYPE</div>
+            <div style="color:#aaa; font-size:12px;">ลักษณะเค้าไพ่</div>
             <div style="font-weight:bold; color:#fff;">{shoe_icon} {shoe_name}</div>
     </div>
 </div>
@@ -280,6 +280,7 @@ def show_validation_panel(module_stats, shoe_type_info):
     best_rate = -1
     
     rows = []
+    name_map = {'historian': 'จำทางไพ่', 'technician': 'อ่านสามเกลอ', 'statistician': 'สถิติรวม', 'booster': 'วิเคราะห์', 'expert': 'สูตรเด็ด'}
     emojis = {'historian': '📜', 'technician': '🛣️', 'statistician': '🧠', 'booster': '⚡', 'expert': '🎲'}
     
     for mod, stats in module_stats.items():
@@ -294,21 +295,22 @@ def show_validation_panel(module_stats, shoe_type_info):
         color = "#4CAF50" if rate >= 50 else "#f44336"
         rows.append(f"""
 <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:13px;">
-    <span>{emojis.get(mod, '')} {mod.capitalize()}</span>
+    <span>{emojis.get(mod, '')} {name_map.get(mod, mod)}</span>
     <span style="color:{color}">{rate:.0f}% <span style="opacity:0.5; font-size:10px;">({wins}/{total})</span></span>
 </div>
 """)
     
     st.markdown(f"""
 <div style="background:#1e1e24; padding:12px; border-radius:10px; border:1px solid #333;">
-    <div style="font-size:12px; color:#aaa; margin-bottom:8px;">MODULE ACCURACY (Live)</div>
+    <div style="font-size:12px; color:#aaa; margin-bottom:8px;">ความแม่นยำรายสำนัก</div>
     {''.join(rows)}
 </div>
 """, unsafe_allow_html=True)
     
     if best_mod:
+        name_map = {'historian': 'จำทางไพ่', 'technician': 'อ่านสามเกลอ', 'statistician': 'สถิติรวม', 'booster': 'วิเคราะห์', 'expert': 'สูตรเด็ด'}
         st.markdown(f"""
 <div style="margin-top:10px; background:linear-gradient(45deg, #2196F3, #21CBF3); padding:8px; border-radius:8px; color:white; text-align:center; font-weight:bold; font-size:14px;">
-    🏆 MVP: {best_mod.title()} ({best_rate:.0f}%)
+    🏆 เซียนมือขึ้น: เซียน{name_map.get(best_mod, best_mod)} ({best_rate:.0f}%)
 </div>
 """, unsafe_allow_html=True)
