@@ -36,7 +36,7 @@ st.set_page_config(
 )
 
 st.title("AI บาคาร่า สเต็ปด๊อกโอ")
-st.markdown("วิเคราะห์เจาะลึก 4 มิติ : **เค้าไพ่ + สถิติ + สูตรลับ + การเดินเงิน**")
+st.markdown("วิเคราะห์เจาะลึก 4 มิติ **เค้าไพ่ + สถิติ + สูตรลับ + การเดินเงิน**")
 
 # --- เมนูด้านซ้าย: จัดการข้อมูล ---
 with st.sidebar:
@@ -50,11 +50,11 @@ with st.sidebar:
         st.session_state['last_prediction'] = None
     if 'module_performance' not in st.session_state:
         st.session_state['module_performance'] = {
-            'historian': 0, 'technician': 0, 'statistician': 0, 'booster': 0, 'expert': 0
+            'historian': 0, 'technician': 0, 'statistician': 0, 'booster': 0, 'expert': 0, 'neural_net': 0
         }
     if 'module_stats' not in st.session_state:
         st.session_state['module_stats'] = {
-            k: {'wins': 0, 'total': 0, 'score': 0} for k in ['historian', 'technician', 'statistician', 'booster', 'expert']
+            k: {'wins': 0, 'total': 0, 'score': 0} for k in ['historian', 'technician', 'statistician', 'booster', 'expert', 'neural_net']
         }
     if 'last_vote_details' not in st.session_state:
         st.session_state['last_vote_details'] = {}
@@ -214,7 +214,7 @@ with col1:
         if st.session_state.get('last_vote_details'):
             details = st.session_state['last_vote_details']
             perf = st.session_state['module_performance']
-            name_map = {'historian': 'เฝ้าขอน', 'technician': 'เค้าไพ่', 'statistician': 'สถิติ', 'booster': 'สูตรคำนวณ', 'expert': 'ล็อคแพทเทิร์น'}
+            name_map = {'historian': 'เฝ้าขอน', 'technician': 'เค้าไพ่', 'statistician': 'สถิติ', 'booster': 'วิเคราะห์', 'expert': 'สูตรเด็ด', 'neural_net': 'โครงข่ายประสาท'}
             for eng_name, local_name in name_map.items():
                 mod_data = details.get(local_name)
                 if mod_data and 'vote' in mod_data:
@@ -227,7 +227,7 @@ with col1:
             # Update detailed Stats (Win Rate per Module)
             if 'module_stats' in st.session_state:
                 stats = st.session_state['module_stats']
-                name_map = {'historian': 'เฝ้าขอน', 'technician': 'เค้าไพ่', 'statistician': 'สถิติ', 'booster': 'สูตรคำนวณ', 'expert': 'ล็อคแพทเทิร์น'}
+                name_map = {'historian': 'เฝ้าขอน', 'technician': 'เค้าไพ่', 'statistician': 'สถิติ', 'booster': 'วิเคราะห์', 'expert': 'สูตรเด็ด', 'neural_net': 'โครงข่ายประสาท'}
                 for eng_name, local_name in name_map.items():
                     mod_data = details.get(local_name)
                     if mod_data and 'vote' in mod_data:
@@ -235,12 +235,12 @@ with col1:
                         target = 0 if v == 'PLAYER' else (1 if v == 'BANKER' else (2 if v == 'TIE' else None))
                         
                         if target is not None:
-                            stats[name]['total'] += 1
+                            stats[eng_name]['total'] += 1
                             if target == outcome:
-                                stats[name]['wins'] += 1
-                                stats[name]['score'] += 1 # Simple score
+                                stats[eng_name]['wins'] += 1
+                                stats[eng_name]['score'] += 1 # Simple score
                             else:
-                                stats[name]['score'] -= 1
+                                stats[eng_name]['score'] -= 1
                             
                             delta['module_stats_update'] = True # Marker for undo
         
@@ -249,7 +249,11 @@ with col1:
             is_win = (lp['vote'] == outcome)
             req = {"Low": 4, "Medium": 3, "High": 2}.get(st.session_state['risk_level'], 3)
             stats = st.session_state['ai_performance']
-            if lp['score'] >= req:
+            
+            if lp['vote'] == 3:
+                stats['history'].append(f"⚪ Skip (Meta-Labeling)")
+                delta['perf_change'] = {'type': 'skip'}
+            elif lp['score'] >= req:
                 if is_win:
                     stats['wins'] += 1
                     stats['history'].append(f"✅ Win ({lp['vote']} vs {outcome})")
@@ -323,22 +327,21 @@ with col2:
     st.subheader("🔮 3. สภาเซียน")
     mod_perf = st.session_state.get('module_performance')
     if mod_perf:
-        st.caption("ความอึดเซียนรายสำนัก (คะแนนมือขึ้น):")
-        item_html = ""
-        emojis = {'historian': '📜', 'technician': '🛣️', 'statistician': '🧠', 'booster': '⚡', 'expert': '🎲'}
-        # ใช้ชื่อที่เข้าใจง่ายที่สุด
-        name_map = {'historian': 'จำทางไพ่', 'technician': 'อ่านสามเกลอ', 'statistician': 'สถิติรวม', 'booster': 'วิเคราะห์', 'expert': 'สูตรเด็ด'}
-        for k, v in mod_perf.items():
-            color = "#4CAF50" if v > 0 else ("#f44336" if v < 0 else "#888")
-            item_html += (
-                f'<div class="flex-item">'
-                f'<div class="expert-emoji">{emojis.get(k)}</div>'
-                f'<div class="expert-value" style="color:{color};">{v:+d}</div>'
-                f'<div class="expert-label">{name_map.get(k)}</div>'
-                f'</div>'
-            )
-        
-        st.markdown(f'<div class="flex-container">{item_html}</div>', unsafe_allow_html=True)
+        with st.expander("📈 ซ่อน/แสดง คะแนนความอึดเซียนรายสำนัก"):
+            item_html = ""
+            emojis = {'historian': '📜', 'technician': '🛣️', 'statistician': '🧠', 'booster': '⚡', 'expert': '🎲', 'neural_net': '🧬'}
+            name_map = {'historian': 'จำทางไพ่', 'technician': 'อ่านสามเกลอ', 'statistician': 'สถิติรวม', 'booster': 'วิเคราะห์', 'expert': 'สูตรเด็ด', 'neural_net': 'โครงข่ายสมองกล'}
+            for k, v in mod_perf.items():
+                color = "#4CAF50" if v > 0 else ("#f44336" if v < 0 else "#888")
+                item_html += (
+                    f'<div class="flex-item">'
+                    f'<div class="expert-emoji">{emojis.get(k)}</div>'
+                    f'<div class="expert-value" style="color:{color};">{v:+d}</div>'
+                    f'<div class="expert-label">{name_map.get(k)}</div>'
+                    f'</div>'
+                )
+            
+            st.markdown(f'<div class="flex-container">{item_html}</div>', unsafe_allow_html=True)
         st.divider()
 
     # --- Validation & Shoe Type Panel ---
@@ -358,12 +361,12 @@ with col2:
             )
             
             if prediction is not None:
-                mapping = {0: "🔵 PLAYER", 1: "🔴 BANKER", 2: "🟢 TIE"}
+                mapping = {0: "🔵 PLAYER", 1: "🔴 BANKER", 2: "🟢 TIE", 3: "⏸️ รอไพ่ (SKIP)"}
                 result_text = mapping.get(prediction, "รอผล")
                 
                 # แสดงสถิติย้อนหลัง (Pattern Stats)
                 if pat_stats:
-                    st.markdown(f"📊 **สถิติขอนที่นิสัยเหมือนห้องนี้:** (เคยพบ {pat_stats['total']} ครั้ง)")
+                    st.markdown(f"📊 **สถิติขอนที่นิสัยเหมือนห้องนี้** (เคยพบ {pat_stats['total']} ครั้ง)")
                     stat_col1, stat_col2 = st.columns(2)
                     with stat_col1:
                         st.markdown(f"<div style='text-align:center;'><span style='color:#2196F3; font-size:12px;'>Player</span><br><span style='font-size:20px; font-weight:bold;'>{pat_stats['p_rate']:.0f}%</span></div>", unsafe_allow_html=True)
@@ -371,32 +374,34 @@ with col2:
                         st.markdown(f"<div style='text-align:center;'><span style='color:#f44336; font-size:12px;'>Banker</span><br><span style='font-size:20px; font-weight:bold;'>{pat_stats['b_rate']:.0f}%</span></div>", unsafe_allow_html=True)
                     st.divider()
 
-                st.markdown("#### 🎯 เจาะลึกการวิเคราะห์")
-                v_html = '<div style="background:rgba(255,255,255,0.05); padding:12px; border-radius:10px; margin-bottom:10px; border:1px solid #444;">'
-                
-                for mod_name, m in vote_details.items():
-                    if not m: continue
-                    vote_val = m.get('vote', 'N/A')
-                    c = '#2196F3' if vote_val == 'PLAYER' else ('#f44336' if vote_val == 'BANKER' else ('#4CAF50' if vote_val == 'TIE' else '#888'))
-                    emoji = m.get("emoji", "❓")
+                with st.expander("🎯 ดูตารางเจาะลึกการวิเคราะห์โหวต"):
+                    v_html = '<div style="background:rgba(255,255,255,0.05); padding:12px; border-radius:10px; margin-bottom:10px; border:1px solid #444;">'
                     
-                    label_extra = ""
-                    if mod_name == 'สูตรเด็ด' and 'pattern' in m:
-                        label_extra = f" <span style='font-size:11px; opacity:0.6;'>({m['pattern']})</span>"
+                    for mod_name, m in vote_details.items():
+                        if not m: continue
+                        vote_val = m.get('vote', 'N/A')
+                        c = '#2196F3' if vote_val == 'PLAYER' else ('#f44336' if vote_val == 'BANKER' else ('#4CAF50' if vote_val == 'TIE' else '#888'))
+                        emoji = m.get("emoji", "❓")
                         
-                    v_html += f'<div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #333;"><span style="color:#fff; font-size:15px;">{emoji} {mod_name}</span><span style="color:{c}; font-weight:bold; font-size:16px;">{vote_val}{label_extra}</span></div>'
-                v_html += '</div>'
-                st.markdown(v_html, unsafe_allow_html=True)
+                        label_extra = ""
+                        if mod_name == 'สูตรเด็ด' and 'pattern' in m:
+                            label_extra = f" <span style='font-size:11px; opacity:0.6;'>({m['pattern']})</span>"
+                            
+                        v_html += f'<div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #333;"><span style="color:#fff; font-size:15px;">{emoji} {mod_name}</span><span style="color:{c}; font-weight:bold; font-size:16px;">{vote_val}{label_extra}</span></div>'
+                    v_html += '</div>'
+                    st.markdown(v_html, unsafe_allow_html=True)
                 
                 max_score = 6
                 score_pct = min(score / max_score * 100, 100)
                 meter_color = "#FFD700" if score_pct >= 80 else ("#2196F3" if prediction == 0 else "#f44336")
                 st.markdown(f'<div style="background:#333; height:12px; border-radius:6px; margin-bottom:5px;"><div style="width:{score_pct}%; background:{meter_color}; height:100%; border-radius:6px;"></div></div>', unsafe_allow_html=True)
-                st.caption(f"คะแนนความมั่นใจ: {score_pct:.0f}% | คะแนนรวม: {score:.1f}")
+                st.caption(f"ความมั่นใจ {score_pct:.0f}% | คะแนนรวม {score:.1f}")
                 
                 req = {"เน้นชัวร์": 4, "ปกติ": 3, "ใจรึง": 2}.get(st.session_state['risk_level'], 3)
-                if score >= req:
-                    st.success(f"🎯 **เซียนแนะนำ: {result_text}**")
+                if prediction == 3:
+                    st.warning("⚠️ **ระบบป้องกันความเสี่ยง รอไพ่ (Skip)**")
+                elif score >= req:
+                    st.success(f"🎯 **เซียนแนะนำ {result_text}**")
                 else:
                     st.info(f"⏸️ **รอจังหวะใหม่** (คะแนน {score:.1f} ยังไม่ถึง {req})")
                 

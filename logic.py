@@ -6,6 +6,8 @@ import streamlit as st
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from xgboost import XGBClassifier
+from sklearn.neural_network import MLPClassifier
+from sklearn.linear_model import LogisticRegression
 from utils import (
     calculate_streak, 
     calculate_tie_stats, 
@@ -46,6 +48,35 @@ def calculate_symmetry(history, window=6):
          return 1.0 # 100% Symmetry
          
     return 0.0
+
+def calculate_markov_features(history, window=20):
+    """คำนวณ Transition Probabilities จาก N ตาล่าสุด"""
+    non_tie = [h for h in history if h != 2]
+    if len(non_tie) < 2:
+        return {'p_to_p': 0.0, 'p_to_b': 0.0, 'b_to_b': 0.0, 'b_to_p': 0.0}
+    
+    recent = non_tie[-window:]
+    transitions = {'P->P': 0, 'P->B': 0, 'B->B': 0, 'B->P': 0}
+    p_count = 0
+    b_count = 0
+    
+    for i in range(len(recent) - 1):
+        prev, curr = recent[i], recent[i+1]
+        if prev == 0:
+            p_count += 1
+            if curr == 0: transitions['P->P'] += 1
+            else: transitions['P->B'] += 1
+        elif prev == 1:
+            b_count += 1
+            if curr == 1: transitions['B->B'] += 1
+            else: transitions['B->P'] += 1
+            
+    return {
+        'p_to_p': transitions['P->P'] / p_count if p_count > 0 else 0.0,
+        'p_to_b': transitions['P->B'] / p_count if p_count > 0 else 0.0,
+        'b_to_b': transitions['B->B'] / b_count if b_count > 0 else 0.0,
+        'b_to_p': transitions['B->P'] / b_count if b_count > 0 else 0.0
+    }
 
 def calculate_momentum(history, window=10):
     """คำนวณ momentum (การเปลี่ยนแปลงของ P/B ratio)"""
@@ -415,9 +446,9 @@ def process_data_from_folder(folder_path, target_profile=None):
             except:
                 continue
         
-        # เลือกเฉพาะตัวที่คล้ายที่สุด Top 30% หรืออย่างน้อย 5 ไฟล์
+        # เลือกเฉพาะตัวที่คล้ายที่สุด Top 30% หรืออย่างน้อย 15 ไฟล์ (ป้องกัน Overfitting)
         file_scores.sort(key=lambda x: x[1], reverse=True)
-        num_to_select = max(5, int(len(file_scores) * 0.3))
+        num_to_select = max(15, int(len(file_scores) * 0.3))
         selected_files = [f[0] for f in file_scores[:num_to_select]]
         all_files = selected_files
         print(f"DEBUG: Contextual Training active. Selected {len(all_files)} similar shoes.")
@@ -458,6 +489,8 @@ def process_data_from_folder(folder_path, target_profile=None):
                         if non_tie_history[-1] == 0: streak_owner = 0
                         elif non_tie_history[-1] == 1: streak_owner = 1
                     
+                    markov = calculate_markov_features(history)
+                    
                     row = {
                         'pattern_1': p1, 'pattern_2': p2, 'pattern_3': p3,
                         'pattern_4': p4, 'pattern_5': p5,
@@ -479,6 +512,10 @@ def process_data_from_folder(folder_path, target_profile=None):
                         'bb_ratio': count_consecutive_pairs(history)[1],
                         'tie_proximity': calculate_tie_proximity(history),
                         'baccarat_symmetry': calculate_symmetry(history),
+                        'p_to_p': markov['p_to_p'],
+                        'p_to_b': markov['p_to_b'],
+                        'b_to_b': markov['b_to_b'],
+                        'b_to_p': markov['b_to_p'],
                         'target': target
                     }
                     data_rows.append(row)
@@ -507,17 +544,17 @@ def train_ensemble_models(df, pattern_sequences):
         models['rf'] = rf_model
         models['rf_features'] = list(X.columns)
         
-        # ส่วนที่ 4: สูตรคำนวณ (XGBoost)
+        # ส่วนที่ 4: สูตรคำนวณ (XGBoost) - Tuned to prevent overfitting on small datasets
         try:
             xgb_model = XGBClassifier(
                 n_estimators=100, 
-                max_depth=4, 
+                max_depth=3,  # ลดความลึกเพื่อป้องกันการ Overfit บนข้อมูลน้อย
                 learning_rate=0.05,
                 subsample=0.8,
                 colsample_bytree=0.8,
-                gamma=0.1,
-                reg_alpha=0.1,
-                reg_lambda=1.0,
+                gamma=0.2, # เพิ่ม gamma
+                reg_alpha=0.5, # เพิ่ม regularization (L1)
+                reg_lambda=2.0, # เพิ่ม regularization (L2)
                 objective='multi:softprob',
                 num_class=3,
                 random_state=42,
@@ -527,6 +564,27 @@ def train_ensemble_models(df, pattern_sequences):
             models['xgb'] = xgb_model
         except Exception as e:
             print(f"ฝึกสูตรล้มเหลว: {e}")
+            
+        # ส่วนที่ 5: โครงข่ายประสาทเทียม (MLP / Neural Network) - Reduced size
+        try:
+            mlp_model = MLPClassifier(hidden_layer_sizes=(16, 8), max_iter=500, random_state=42)
+            mlp_model.fit(X, y)
+            models['mlp'] = mlp_model
+        except Exception as e:
+            print(f"ฝึก MLP ล้มเหลว: {e}")
+
+        # Meta-Model (Stacking Classifier)
+        try:
+            rf_proba = models['rf'].predict_proba(X)
+            xgb_proba = models['xgb'].predict_proba(X) if 'xgb' in models else np.zeros((len(X), 3))
+            mlp_proba = models['mlp'].predict_proba(X) if 'mlp' in models else np.zeros((len(X), 3))
+            
+            X_meta = np.hstack((rf_proba, xgb_proba, mlp_proba))
+            meta_model = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
+            meta_model.fit(X_meta, y)
+            models['meta'] = meta_model
+        except Exception as e:
+            print(f"ฝึก Meta-Model ล้มเหลว: {e}")
         
         # ส่วนที่ 1: เซียนเฝ้าขอน (KNN)
         if pattern_sequences:
@@ -592,7 +650,7 @@ def ensemble_predict(history, models, module_performance=None, st_session_state=
             knn_proba = models['knn'].predict_proba(pattern)[0]
             knn_conf = max(knn_proba) * 100
             
-            w = 2 * multipliers['เฝ้าขอน']
+            w = 2 * multipliers['จำทางไพ่']
             if knn_pred == 0:
                 votes['player'] += w
                 vote_details['เฝ้าขอน'] = {'vote': 'PLAYER', 'conf': knn_conf, 'emoji': '📜'}
@@ -603,7 +661,7 @@ def ensemble_predict(history, models, module_performance=None, st_session_state=
     # ส่วนที่ 2: เซียนเค้าไพ่ (Technician)
     tech_vote, roads_agree = get_technician_vote(history)
     derived_overall = get_derived_roads_features(history)
-    tech_weight = 1.0 * multipliers['เค้าไพ่']
+    tech_weight = 1.0 * multipliers['อ่านสามเกลอ']
     if derived_overall['overall_stability'] < 0.4:
         tech_weight *= 0.5 
         
@@ -612,84 +670,123 @@ def ensemble_predict(history, models, module_performance=None, st_session_state=
         votes[target] += tech_weight
         vote_details['เค้าไพ่'] = {'vote': target.upper(), 'roads': roads_agree, 'emoji': '🛣️'}
     
-    # ส่วนที่ 3: เซียนสถิติ (RF)
-    if 'rf' in models:
-        if len(history) >= 5:
-            p1, p2, p3, p4, p5 = history[-5:]
-            derived_features = get_derived_roads_features(history)
-            current_streak = calculate_streak(history)
-            tie_rate, gap_since_tie = calculate_tie_stats(history, 20)
-            last_10 = [h for h in history[-10:] if h != 2]
-            b_ratio = last_10.count(1) / len(last_10) if last_10 else 0.5
-            
-            last_20 = [h for h in history[-20:] if h != 2]
-            p_rate_20 = last_20.count(0) / len(last_20) if last_20 else 0.5
-            b_rate_20 = last_20.count(1) / len(last_20) if last_20 else 0.5
-            
-            streak_owner = 0.5
-            non_tie_hist_local = [h for h in history if h != 2]
-            if len(non_tie_hist_local) >= 2:
-                if non_tie_hist_local[-1] == 0: streak_owner = 0
-                elif non_tie_hist_local[-1] == 1: streak_owner = 1
+    # Machine Learning Models Block (RF, XGB, MLP, Meta-Model)
+    if 'rf' in models and len(history) >= 5:
+        p1, p2, p3, p4, p5 = history[-5:]
+        derived_features = get_derived_roads_features(history)
+        current_streak = calculate_streak(history)
+        tie_rate, gap_since_tie = calculate_tie_stats(history, 20)
+        last_10 = [h for h in history[-10:] if h != 2]
+        b_ratio = last_10.count(1) / len(last_10) if last_10 else 0.5
+        
+        last_20 = [h for h in history[-20:] if h != 2]
+        p_rate_20 = last_20.count(0) / len(last_20) if last_20 else 0.5
+        b_rate_20 = last_20.count(1) / len(last_20) if last_20 else 0.5
+        
+        streak_owner = 0.5
+        non_tie_hist_local = [h for h in history if h != 2]
+        if len(non_tie_hist_local) >= 2:
+            if non_tie_hist_local[-1] == 0: streak_owner = 0
+            elif non_tie_hist_local[-1] == 1: streak_owner = 1
 
-            input_data = pd.DataFrame([{
-                'pattern_1': p1, 'pattern_2': p2, 'pattern_3': p3,
-                'pattern_4': p4, 'pattern_5': p5,
-                'current_streak': min(current_streak, 10),
-                'streak_owner': streak_owner,
-                'banker_trend': b_ratio,
-                'player_rate_20': p_rate_20,
-                'banker_rate_20': b_rate_20,
-                'tie_rate_20': tie_rate,
-                'gap_since_tie': min(gap_since_tie, 30),
-                'is_stable': derived_features['is_stable'],
-                'overall_stability': derived_features['overall_stability'],
-                'position_phase': get_position_phase(len(history)),
-                'momentum': calculate_momentum(history),
-                'alternating_ratio': calculate_alternating_ratio(history),
-                'streak_break_freq': calculate_streak_break_frequency(history),
-                'pp_ratio': count_consecutive_pairs(history)[0],
-                'bb_ratio': count_consecutive_pairs(history)[1],
-                'tie_proximity': calculate_tie_proximity(history),
-                'baccarat_symmetry': calculate_symmetry(history)
-            }])
-            
-            rf_pred = models['rf'].predict(input_data)[0]
-            rf_proba = models['rf'].predict_proba(input_data)[0]
-            rf_conf = max(rf_proba) * 100
-            
-            w = 1 * multipliers['สถิติ']
-            if rf_conf > 55:
-                if rf_pred == 0: votes['player'] += w
-                elif rf_pred == 1: votes['banker'] += w
-                elif rf_pred == 2: votes['tie'] += w * 1.5
-            
-            vote_text = 'PLAYER' if rf_pred == 0 else ('BANKER' if rf_pred == 1 else 'TIE')
-            vote_details['สถิติ'] = {'vote': vote_text, 'conf': rf_conf, 'emoji': '🧠'}
-    
-    # ส่วนที่ 4: สูตรคำนวณ (XGBoost)
-    if 'xgb' in models:
-        if len(history) >= 5:
-            # ใช้ input ชุดเดียวกับ RF
-            xgb_input = input_data # Reuse input_data from RF section above
-            
+        markov = calculate_markov_features(history)
+
+        input_data = pd.DataFrame([{
+            'pattern_1': p1, 'pattern_2': p2, 'pattern_3': p3,
+            'pattern_4': p4, 'pattern_5': p5,
+            'current_streak': min(current_streak, 10),
+            'streak_owner': streak_owner,
+            'banker_trend': b_ratio,
+            'player_rate_20': p_rate_20,
+            'banker_rate_20': b_rate_20,
+            'tie_rate_20': tie_rate,
+            'gap_since_tie': min(gap_since_tie, 30),
+            'is_stable': derived_features['is_stable'],
+            'overall_stability': derived_features['overall_stability'],
+            'position_phase': get_position_phase(len(history)),
+            'momentum': calculate_momentum(history),
+            'alternating_ratio': calculate_alternating_ratio(history),
+            'streak_break_freq': calculate_streak_break_frequency(history),
+            'pp_ratio': count_consecutive_pairs(history)[0],
+            'bb_ratio': count_consecutive_pairs(history)[1],
+            'tie_proximity': calculate_tie_proximity(history),
+            'baccarat_symmetry': calculate_symmetry(history),
+            'p_to_p': markov['p_to_p'],
+            'p_to_b': markov['p_to_b'],
+            'b_to_b': markov['b_to_b'],
+            'b_to_p': markov['b_to_p']
+        }])
+        
+        rf_proba = np.zeros((1, 3))
+        xgb_proba = np.zeros((1, 3))
+        mlp_proba = np.zeros((1, 3))
+        
+        # 1. Random Forest
+        rf_pred = models['rf'].predict(input_data)[0]
+        rf_proba = models['rf'].predict_proba(input_data)
+        rf_conf = max(rf_proba[0]) * 100
+        vote_text = 'PLAYER' if rf_pred == 0 else ('BANKER' if rf_pred == 1 else 'TIE')
+        vote_details['สถิติ'] = {'vote': vote_text, 'conf': rf_conf, 'emoji': '🧠'}
+        
+        # 2. XGBoost
+        if 'xgb' in models:
             try:
-                xgb_pred = models['xgb'].predict(xgb_input)[0]
-                xgb_proba = models['xgb'].predict_proba(xgb_input)[0]
-                xgb_conf = max(xgb_proba) * 100
-                
-                base_w = 2.0 if xgb_conf > 75 else 1.5
-                w = base_w * multipliers['สูตร']
-                
-                if xgb_conf > 50:
-                    if xgb_pred == 0: votes['player'] += w
-                    elif xgb_pred == 1: votes['banker'] += w
-                    elif xgb_pred == 2: votes['tie'] += w * 1.2
-                
+                xgb_pred = models['xgb'].predict(input_data)[0]
+                xgb_proba = models['xgb'].predict_proba(input_data)
+                xgb_conf = max(xgb_proba[0]) * 100
                 xgb_vote_text = 'PLAYER' if xgb_pred == 0 else ('BANKER' if xgb_pred == 1 else 'TIE')
                 vote_details['วิเคราะห์'] = {'vote': xgb_vote_text, 'conf': xgb_conf, 'emoji': '⚡'}
             except Exception as e:
                 print(f"XGBoost error: {e}")
+                
+        # 3. MLP (Neural Network)
+        if 'mlp' in models:
+            try:
+                mlp_pred = models['mlp'].predict(input_data)[0]
+                mlp_proba = models['mlp'].predict_proba(input_data)
+                mlp_conf = max(mlp_proba[0]) * 100
+                mlp_vote_text = 'PLAYER' if mlp_pred == 0 else ('BANKER' if mlp_pred == 1 else 'TIE')
+                vote_details['โครงข่ายประสาท'] = {'vote': mlp_vote_text, 'conf': mlp_conf, 'emoji': '🧬'}
+            except Exception as e:
+                print(f"MLP error: {e}")
+                
+        # 4. Meta-Model Integration (Stacking) & Statistical Additive Voting
+        if 'meta' in models:
+            # นำความน่าจะเป็นจากเซียนแต่ละสาย (RF, XGB, MLP) ส่งตั้งต้นให้เซียนระดับสูง (Meta) ตัดสิน
+            X_meta_input = np.hstack((rf_proba, xgb_proba, mlp_proba))
+            try:
+                meta_pred = models['meta'].predict(X_meta_input)[0]
+                meta_proba = models['meta'].predict_proba(X_meta_input)
+                meta_conf = max(meta_proba[0]) * 100
+                
+                # เชื่อการโหวตจาก Meta-Model แทนการบวกน้ำหนักด้วยมือ
+                w = 3.0 if meta_conf > 60 else 1.5
+                if meta_pred == 0: votes['player'] += w * multipliers['สถิติรวม']
+                elif meta_pred == 1: votes['banker'] += w * multipliers['สถิติรวม']
+                elif meta_pred == 2: votes['tie'] += w * 1.5 * multipliers['สถิติรวม']
+                
+                meta_vote_text = 'PLAYER' if meta_pred == 0 else ('BANKER' if meta_pred == 1 else 'TIE')
+                vote_details['สถิติรวม'] = {'vote': meta_vote_text, 'conf': meta_conf, 'emoji': '🤖'}
+            except Exception as e:
+                print(f"Meta-Model Error: {e}")
+        else:
+            # Fallback (กรณีเทรน Meta ไม่สำเร็จ)
+            if max(rf_proba[0]) > 0.55:
+                if rf_pred == 0: votes['player'] += 1.0 * multipliers['สถิติรวม']
+                elif rf_pred == 1: votes['banker'] += 1.0 * multipliers['สถิติรวม']
+                elif rf_pred == 2: votes['tie'] += 1.5 * multipliers['สถิติรวม']
+                
+            if 'xgb' in models and max(xgb_proba[0]) > 0.5:
+                w = 2.0 if max(xgb_proba[0]) > 0.75 else 1.5
+                if xgb_pred == 0: votes['player'] += w * multipliers['วิเคราะห์']
+                elif xgb_pred == 1: votes['banker'] += w * multipliers['วิเคราะห์']
+                elif xgb_pred == 2: votes['tie'] += w * 1.2 * multipliers['วิเคราะห์']
+                
+            if 'mlp' in models and max(mlp_proba[0]) > 0.5:
+                w = 1.5 if max(mlp_proba[0]) > 0.7 else 1.0
+                if mlp_pred == 0: votes['player'] += w
+                elif mlp_pred == 1: votes['banker'] += w
+                elif mlp_pred == 2: votes['tie'] += w * 1.5
     
     # ส่วนที่ 5: ล็อคแพทเทิร์น (Expert Rules)
     if 'patterns' in models and models['patterns']:
@@ -726,7 +823,14 @@ def ensemble_predict(history, models, module_performance=None, st_session_state=
 
     # Final Decision
     max_v = max(votes.values())
-    if votes['tie'] == max_v and votes['tie'] >= 1.5:
+    sorted_v = sorted(votes.values(), reverse=True)
+    margin = sorted_v[0] - sorted_v[1] if len(sorted_v) > 1 else max_v
+    
+    # Meta-Labeling (Skip/Wait) Logic Check
+    # Skip if max value is very low, or if the margin between top two choices is too small (conflict)
+    if max_v < 1.0 or (margin < 0.5 and sorted_v[0] > 0):
+        final_prediction = 3 # 3 is ACTION_SKIP
+    elif votes['tie'] == max_v and votes['tie'] >= 1.5:
         final_prediction = 2
     elif votes['player'] > votes['banker']:
         final_prediction = 0
@@ -734,35 +838,3 @@ def ensemble_predict(history, models, module_performance=None, st_session_state=
         final_prediction = 1
     
     return final_prediction, max_v, vote_details, pat_stats
-
-    # Session Learning from st_session_state
-    if st_session_state and 'session_mistakes' in st_session_state:
-        current_pat = non_tie_hist[-5:]
-        for mistake in st_session_state['session_mistakes']:
-            if len(current_pat) >= 3 and current_pat == mistake['pattern']:
-                if mistake['wrong_predict'] == 0:
-                    votes['player'] -= 0.5
-                elif mistake['wrong_predict'] == 1:
-                    votes['banker'] -= 0.5
-
-    # Dynamic Weighting
-    if module_performance:
-        for mod, perf_score in module_performance.items():
-            if mod in vote_details:
-                mod_vote = vote_details[mod].get('vote')
-                bonus = 0.5 if perf_score >= 2 else (-0.5 if perf_score <= -2 else 0)
-                if bonus != 0 and mod_vote in ['PLAYER', 'BANKER', 'TIE']:
-                    target = 'player' if mod_vote == 'PLAYER' else ('banker' if mod_vote == 'BANKER' else 'tie')
-                    votes[target] += bonus
-
-    # Final Decision
-    max_v = max(votes.values())
-    if votes['tie'] == max_v and votes['tie'] >= 1.5:
-        final_prediction = 2
-    elif votes['player'] > votes['banker']:
-        final_prediction = 0
-    else:
-        final_prediction = 1
-    
-    total_score = max_v
-    return final_prediction, total_score, vote_details
