@@ -420,38 +420,14 @@ def get_expert_vote(history, patterns):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def process_data_from_folder(folder_path, target_profile=None):
-    """อ่านไฟล์ .txt ทั้งหมดใน data folder และสร้าง features (รองรับการกรองตามโปรไฟล์)"""
+def process_data_from_folder(folder_path):
+    """อ่านไฟล์ .txt ทั้งหมดใน data folder และสร้าง features ข้อมูลทั้งหมด"""
     all_files = glob.glob(os.path.join(folder_path, "*.txt"))
     data_rows = []
     pattern_sequences = []
     
     if not all_files:
         return pd.DataFrame(), []
-
-    # ถ้ามี target_profile ให้คัดเลือกเฉพาะไฟล์ที่คล้ายกัน
-    if target_profile:
-        file_scores = []
-        for filepath in all_files:
-            try:
-                with open(filepath, 'r') as f:
-                    content = f.read().strip()
-                    raw = content.split(']')[1] if ']' in content else content
-                    game_seq = [int(x) for x in raw.replace(',', ' ').split() if x.strip().isdigit()]
-                    
-                    if len(game_seq) >= 20:
-                        profile = calculate_shoe_profile(game_seq)
-                        score = calculate_shoe_similarity(target_profile, profile)
-                        file_scores.append((filepath, score))
-            except:
-                continue
-        
-        # เลือกเฉพาะตัวที่คล้ายที่สุด Top 30% หรืออย่างน้อย 15 ไฟล์ (ป้องกัน Overfitting)
-        file_scores.sort(key=lambda x: x[1], reverse=True)
-        num_to_select = max(15, int(len(file_scores) * 0.3))
-        selected_files = [f[0] for f in file_scores[:num_to_select]]
-        all_files = selected_files
-        print(f"DEBUG: Contextual Training active. Selected {len(all_files)} similar shoes.")
 
     for filepath in all_files:
         try:
@@ -827,7 +803,6 @@ def ensemble_predict(history, models, module_performance=None, st_session_state=
     margin = sorted_v[0] - sorted_v[1] if len(sorted_v) > 1 else max_v
     
     # Meta-Labeling (Skip/Wait) Logic Check
-    # Skip if max value is very low, or if the margin between top two choices is too small (conflict)
     if max_v < 1.0 or (margin < 0.5 and sorted_v[0] > 0):
         final_prediction = 3 # 3 is ACTION_SKIP
     elif votes['tie'] == max_v and votes['tie'] >= 1.5:
@@ -836,5 +811,74 @@ def ensemble_predict(history, models, module_performance=None, st_session_state=
         final_prediction = 0
     else:
         final_prediction = 1
+
+    # Consensus Checking (How many experts agree on the final choice)
+    consensus_count = 0
+    if final_prediction in [0, 1, 2]:
+        target_name = 'PLAYER' if final_prediction == 0 else ('BANKER' if final_prediction == 1 else 'TIE')
+        for v in vote_details.values():
+            if v.get('vote') == target_name:
+                consensus_count += 1
+
+    return final_prediction, max_v, vote_details, pat_stats, consensus_count
+
+def calculate_dog_oh_advice(capital, target_profit, current_profit, risk_level, urgency, score, consensus, last_big_miss=False, min_bet=10.0):
+    """
+    กุนซือการเงินด๊อกโอ: คำนวณยอดเงินที่ควรแทงตามสภาพจิตใจและเป้าหมาย
+    """
+    if current_profit >= target_profit:
+        return 0, "💰 ภารกิจสำเร็จ! ถึงเป้าหมายแล้ว แนะนำให้ถอนเงินและเลิกเล่นทันทีครับ"
+        
+    # Stop Loss Check (ระบบป้องกันการล้างพอร์ต)
+    if current_profit <= -capital:
+        return 0, "⚠️ ขณะนี้คุณได้หมดตูดแล้ว พอเลิ๊ก"
     
-    return final_prediction, max_v, vote_details, pat_stats
+    # 1. คำนวณหน่วยพื้นฐาน (Base Unit)
+    # เงินร้อน = 1% ของทุน, เงินเย็น = 2-3% ของทุน
+    unit_pct = 0.01 if urgency == "ร้อนเงิน (ต้องชัวร์)" else 0.02
+    if risk_level == "สายซิ่ง (Aggressive)": unit_pct *= 1.5
+    elif risk_level == "เน้นปลอดภัย (Safe)": unit_pct *= 0.7
+    
+    base_unit = max(min_bet, capital * unit_pct) # ใช้ขั้นต่ำจากค่าที่ส่งมา
+    
+    # 2. Reality Check (เคยพลาดยับมาไหม?)
+    if last_big_miss:
+        return 0, "🚨 ตาที่แล้วเราชัวร์มากแต่พลาด! กุนซือแนะนำให้ 'หยุดพัก' (Skip) 1 ตาเพื่อดึงสติครับ"
+
+    # 3. ตัดสินใจตามความมั่นใจ (Score & Consensus)
+    # ต้องมั่นใจระดับหนึ่งถึงจะให้แทง
+    entry_threshold = 3.5 if urgency == "ร้อนเงิน (ต้องชัวร์)" else 3.0
+    
+    if score < entry_threshold:
+        return 0, f"⏸️ ความมั่นใจ {score:.1f} ยังไม่ถึงเกณฑ์ {entry_threshold} กุนซือแนะนำให้รอก่อนครับ"
+    
+    # คำนวณยอดเงิน
+    bet_amount = base_unit
+    advice_text = "✅ จังหวะกำลังดี ลงเบาๆ 1 หน่วยครับ"
+    
+    # มั่นใจมาก + ทุกคนเห็นตรงกัน (High Consensus)
+    if score >= 4.5 and consensus >= 3:
+        if risk_level != "เน้นปลอดภัย (Safe)":
+            bet_amount = base_unit * 2
+            advice_text = "🔥 มั่นใจสูงมาก! และเซียนเห็นตรงกัน แนะนำลง 2 หน่วยครับ"
+        else:
+            bet_amount = base_unit * 1.5
+            advice_text = "🛡️ มั่นใจสูง! แต่คุณเน้นปลอดภัย กุนซือแนะนำลงแค่ 1.5 หน่วยพอครับ"
+
+    # มั่นใจสุดขีด (Dog-Oh Special)
+    if score >= 5.5 and consensus >= 4:
+         if urgency != "ร้อนเงิน (ต้องชัวร์)":
+             bet_amount = base_unit * 3
+             advice_text = "🚀 **ไม้เด็ดด๊อกโอ!** เซียนทุกคนพร้อมใจกันโหวต แนะนำฉวยโอกาสนี้ครับ"
+         else:
+             bet_amount = base_unit * 2
+             advice_text = "⚠️ มั่นใจสุดแต่คุณร้อนเงิน! กุนซือขอจำกัดไว้ที่ 2 หน่วยเพื่อความปลอดภัยครับ"
+
+    # ปรับให้เป็นเลขกลมๆ (หลักสิบ)
+    bet_amount = round(bet_amount / 10) * 10
+    
+    # ตรวจสอบ Stop Loss
+    if current_profit <= -(capital * 0.3): # ขาดทุนเกิน 30%
+        return 0, "😱 ทุนลดลงเกิน 30% แล้ว! กุนซือขอสั่งให้ 'เลิกเล่น' ทันทีเพื่อรักษาทุนที่เหลือครับ"
+
+    return bet_amount, advice_text

@@ -22,15 +22,25 @@ def render_big_road(history, mini=False, theme='dark'):
             winner = int(item)
         except:
             continue
-        if winner == 2:
-            if prev_winner is None:
-                grid[0][0] = {'color': 'green', 'tie_count': 1}
-            elif row < ROWS and col < COLS and grid[row][col]:
+            
+        if winner == 2: # TIE
+            if grid[row][col] is None:
+                # ถ้ายังไม่มี P/B เลย ให้สร้างตาราง Tie ในช่อง (0,0)
+                grid[row][col] = {'color': 'green', 'tie_count': 1}
+            else:
+                # ถ้ามี P/B อยู่แล้ว หรือมี Tie อยู่เดิม ให้เพิ่มจำนวน
                 grid[row][col]['tie_count'] = grid[row][col].get('tie_count', 0) + 1
             continue
+            
         color = 'blue' if winner == 0 else 'red'
+        
         if prev_winner is None:
-            grid[row][col] = {'color': color}
+            # ตาแรกที่เป็น P/B
+            if grid[row][col] and grid[row][col]['color'] == 'green':
+                # ถ้ามี Tie อยู่ก่อนแล้ว ให้เปลี่ยนสีวงกลมแต่เก็บจำนวน Tie ไว้
+                grid[row][col]['color'] = color
+            else:
+                grid[row][col] = {'color': color}
             prev_winner = winner
             start_col = 0
             is_tailing = False
@@ -312,5 +322,47 @@ def show_validation_panel(module_stats, shoe_type_info):
         st.markdown(f"""
 <div style="margin-top:10px; background:linear-gradient(45deg, #2196F3, #21CBF3); padding:8px; border-radius:8px; color:white; text-align:center; font-weight:bold; font-size:14px;">
     🏆 เซียนมือขึ้น: เซียน{name_map.get(best_mod, best_mod)} ({best_rate:.0f}%)
+</div>
+""", unsafe_allow_html=True)
+
+def show_financial_advice_card(bet_amount, advice_text, risk_level, urgency):
+    """แสดงการ์ดคำแนะนำการลงทุนสไตล์ด๊อกโอ (ขนาดใหญ่พิเศษ)"""
+    color = "#FFD700" if bet_amount > 0 else "#888" # สีเหลืองทอง
+    icon = "💰" if bet_amount > 0 else "⏸️"
+    
+    st.markdown(f"""
+<div style="background:rgba(255,255,255,0.05); padding:20px; border-radius:15px; border: 3px solid {color}; text-align:center; box-shadow: 0 4px 25px rgba(0,0,0,0.5);">
+    <div style="font-weight:bold; font-size:20px; color:{color}; margin-bottom:10px;">
+        {icon} กุนซือชี้เป้าลงเงิน
+    </div>
+    <div style="font-size:16px; color:#eee; margin-bottom:15px; line-height:1.4;">{advice_text}</div>
+    <div style="background:rgba(0,0,0,0.3); padding:20px; border-radius:10px; border:1px solid rgba(255,255,255,0.1);">
+        <div style="font-size:12px; opacity:0.7; color:#fff; text-transform:uppercase; letter-spacing:1px;">ยอดเงินที่แนะนำ (THB)</div>
+        <div style="font-size:56px; font-weight:900; color:{color}; text-shadow: 0 0 15px {color}44; margin:10px 0;">
+            {bet_amount if bet_amount > 0 else '--'}
+        </div>
+        <div style="font-size:14px; opacity:0.8;">{ "บาท" if bet_amount > 0 else "รอจังหวะ" }</div>
+    </div>
+    <div style="display:flex; justify-content:space-around; margin-top:15px; font-size:12px; color:#aaa; border-top:1px solid #333; padding-top:10px;">
+        <span title="Risk Level">ระดับ {risk_level.split(' ')[0]}</span>
+        <span title="Urgency">สถานะ {urgency.split(' ')[0]}</span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+def show_profit_progress(current_profit, target_profit):
+    """แสดงหลอดเป้าหมายกำไร (แบบ Compact)"""
+    pct = min(max(current_profit / target_profit * 100, 0), 100) if target_profit > 0 else 0
+    bg_color = "#4CAF50" if current_profit >= 0 else "#f44336"
+    
+    st.markdown(f"""
+<div style="background:rgba(255,255,255,0.03); padding:8px 15px; border-radius:10px; border:1px solid #333; margin-bottom:10px;">
+    <div style="display:flex; justify-content:space-between; font-size:13px; align-items:center;">
+        <span style="color:#aaa; font-weight:bold;">🏹 PROGRESS <span style="color:#fff;">{pct:.0f}%</span></span>
+        <span style="font-weight:bold; font-size:14px;">{current_profit:,.0f} / {target_profit:,.0f} THB</span>
+    </div>
+    <div style="background:#222; height:6px; border-radius:3px; overflow:hidden; margin-top:6px;">
+        <div style="width:{pct}%; background:{bg_color}; height:100%; border-radius:3px; transition: width 0.5s ease;"></div>
+    </div>
 </div>
 """, unsafe_allow_html=True)

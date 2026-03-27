@@ -8,7 +8,8 @@ from logic import (
     process_data_from_folder,
     get_derived_roads_features,
     get_shoe_type,
-    calculate_shoe_profile
+    calculate_shoe_profile,
+    calculate_dog_oh_advice
 )
 from utils import (
     load_all_games, 
@@ -22,7 +23,9 @@ from ui_components import (
     render_raw_data, 
     show_performance_dashboard,
     show_gallery_modal,
-    show_validation_panel
+    show_validation_panel,
+    show_financial_advice_card,
+    show_profit_progress
 )
 
 # ==========================================
@@ -64,18 +67,24 @@ with st.sidebar:
         st.session_state['undo_stack'] = []
     if 'streak_count' not in st.session_state:
         st.session_state['streak_count'] = 0
-    if 'auto_train' not in st.session_state:
-        st.session_state['auto_train'] = True 
-
+    
+    # Financial State
+    if 'capital_thb' not in st.session_state:
+        st.session_state['capital_thb'] = 1000.0
+    if 'target_profit_thb' not in st.session_state:
+        st.session_state['target_profit_thb'] = 500.0
+    if 'current_profit_thb' not in st.session_state:
+        st.session_state['current_profit_thb'] = 0.0
+    if 'last_bet_amount' not in st.session_state:
+        st.session_state['last_bet_amount'] = 0.0
+    if 'last_big_miss' not in st.session_state:
+        st.session_state['last_big_miss'] = False
+    if 'min_bet_thb' not in st.session_state:
+        st.session_state['min_bet_thb'] = 10.0
     def trigger_training():
         """ฟังก์ชันสำหรับคำนวณสถิติใหม่"""
         try:
-            target_profile = None
-            curr_game = st.session_state.get('current_game', [])
-            if len(curr_game) >= 15:
-                target_profile = calculate_shoe_profile(curr_game)
-            
-            df, pattern_sequences = process_data_from_folder(data_path, target_profile=target_profile)
+            df, pattern_sequences = process_data_from_folder(data_path)
             
             if not df.empty:
                 models = train_ensemble_models(df, pattern_sequences)
@@ -84,7 +93,7 @@ with st.sidebar:
                 st.session_state['models'] = models
                 st.session_state['pattern_sequences'] = pattern_sequences
                 st.session_state['data_count'] = len(df)
-                st.session_state['trained_with_context'] = (target_profile is not None)
+                st.session_state['trained_with_context'] = False
                 return True
             else:
                 st.error("ไม่เจอไฟล์ข้อมูลในโฟลเดอร์ data")
@@ -96,8 +105,6 @@ with st.sidebar:
         if trigger_training():
             st.success(f"✅ เตรียมพร้อมหน่วยประมวลผลเซียน 5 สายเรียบร้อย")
 
-    st.session_state['auto_train'] = st.checkbox("⚡ คำนวณอัตโนมัติ (ทุกตา)", value=st.session_state['auto_train'])
-                
     st.divider()
     
     # --- Auto Pattern Mining Logic ---
@@ -133,75 +140,14 @@ with st.sidebar:
     if st.session_state.get('session_mistakes'):
         st.caption(f"🧠 Adaptive Mode: เรียนรู้แล้ว {len(st.session_state['session_mistakes'])} จุด")
 
-    st.divider()
-    st.subheader("🎨 ตั้งค่าสีตาราง")
-    theme_choice = st.radio("Theme", ["ตารางสีมืด 🌙", "ตารางสีสว่าง ☀️"], index=1, horizontal=True, label_visibility="collapsed")
-    st.session_state['theme'] = 'dark' if "ตารางสีมืด" in theme_choice else 'light'
-    
-    st.divider()
-    if 'models' in st.session_state:
-        st.info(f"Data: {st.session_state['data_count']} samples")
-        if st.session_state.get('trained_with_context'):
-            st.success("🎯 **โหมด: วิเคราะห์เจาะจงห้องล่าสุด**")
-        else:
-            st.caption("🌐 โหมด: วิเคราะห์รวมจากสถิติทั้งหมด")
-    else:
-        st.warning("⚠️ กรุณากดเทรนก่อน")
-
-col1, col2 = st.columns([1.5, 1])
-
-# CSS for Horizontal Display on Mobile
-st.markdown("""
-<style>
-    [data-testid="column"] { min-width: 0 !important; }
-    .flex-container { display: flex; justify-content: space-around; width: 100%; gap: 5px; }
-    .flex-item { text-align: center; flex: 1; min-height: 80px; }
-    .expert-emoji { font-size: 24px; margin-bottom: 5px; }
-    .expert-label { font-size: 13px; color: #aaa; margin-top: 2px; }
-    .expert-value { font-size: 18px; font-weight: bold; }
-</style>
-""", unsafe_allow_html=True)
-
-with col1:
-    st.subheader("🎰 2. บันทึกผลไพ่สด")
-    
-    if 'ai_performance' in st.session_state:
-        stats = st.session_state['ai_performance']
-        curr_game = st.session_state.get('current_game', [])
-        p_pct, b_pct = 50, 50
-        if curr_game:
-            total_g = len(curr_game)
-            p_pct = curr_game.count(0) / total_g * 100
-            b_pct = curr_game.count(1) / total_g * 100
-        
-        show_performance_dashboard(stats, st.session_state['streak_count'], p_pct, b_pct)
-        with st.expander("📊 ดูประวัติย่อ"):
-             for log in list(reversed(stats['history']))[:5]:
-                 st.caption(log)
-    
-    if 'current_game' not in st.session_state:
-        st.session_state['current_game'] = []
-    if 'show_raw_data' not in st.session_state:
-        st.session_state['show_raw_data'] = False
-
-    header_col1, header_col2 = st.columns([3, 1])
-    with header_col1:
-        st.markdown("### 📊 ตาราง Big Road")
-    with header_col2:
-        if st.button("🔄 สลับมุมมอง", use_container_width=True):
-            st.session_state['show_raw_data'] = not st.session_state['show_raw_data']
-    
-    if st.session_state['show_raw_data']:
-        st.markdown(render_raw_data(st.session_state['current_game']), unsafe_allow_html=True)
-    else:
-        current_theme = st.session_state.get('theme', 'dark')
-        st.markdown(render_big_road(st.session_state['current_game'], theme=current_theme), unsafe_allow_html=True)
-    
-    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-    c1, c2, c3, c4 = st.columns(4)
-    
     def update_learning(outcome):
-        delta = {'added_mistake': None, 'module_changes': {}, 'perf_change': None, 'prev_streak': st.session_state['streak_count']}
+        delta = {
+            'added_mistake': None, 
+            'module_changes': {}, 
+            'perf_change': None, 
+            'prev_streak': st.session_state['streak_count'],
+            'prev_big_miss': st.session_state.get('last_big_miss', False)
+        }
         
         if st.session_state.get('last_prediction'):
             lp = st.session_state['last_prediction']
@@ -227,7 +173,6 @@ with col1:
             # Update detailed Stats (Win Rate per Module)
             if 'module_stats' in st.session_state:
                 stats = st.session_state['module_stats']
-                name_map = {'historian': 'เฝ้าขอน', 'technician': 'เค้าไพ่', 'statistician': 'สถิติ', 'booster': 'วิเคราะห์', 'expert': 'สูตรเด็ด', 'neural_net': 'โครงข่ายประสาท'}
                 for eng_name, local_name in name_map.items():
                     mod_data = details.get(local_name)
                     if mod_data and 'vote' in mod_data:
@@ -238,32 +183,47 @@ with col1:
                             stats[eng_name]['total'] += 1
                             if target == outcome:
                                 stats[eng_name]['wins'] += 1
-                                stats[eng_name]['score'] += 1 # Simple score
+                                stats[eng_name]['score'] += 1
                             else:
                                 stats[eng_name]['score'] -= 1
                             
-                            delta['module_stats_update'] = True # Marker for undo
+                            delta['module_stats_update'] = True
+                            delta.setdefault('module_stats_changes', {})[eng_name] = {'win': (target == outcome), 'score': (1 if target == outcome else -1)}
         
         if st.session_state.get('last_prediction') and outcome != 2:
             lp = st.session_state['last_prediction']
             is_win = (lp['vote'] == outcome)
-            req = {"Low": 4, "Medium": 3, "High": 2}.get(st.session_state['risk_level'], 3)
+            risk_level = st.session_state.get('risk_level', 'Medium')
+            req = {"เน้นชัวร์": 4, "ปกติ": 3, "ใจรึง": 2}.get(risk_level, 3)
             stats = st.session_state['ai_performance']
             
             if lp['vote'] == 3:
                 stats['history'].append(f"⚪ Skip (Meta-Labeling)")
                 delta['perf_change'] = {'type': 'skip'}
             elif lp['score'] >= req:
+                # Calculate Money Effect
+                bet = st.session_state.get('last_bet_amount', 0)
                 if is_win:
+                    # Banker commission (5%)
+                    profit = bet * 0.95 if lp['vote'] == 1 else bet
                     stats['wins'] += 1
-                    stats['history'].append(f"✅ Win ({lp['vote']} vs {outcome})")
+                    stats['history'].append(f"✅ Win ({lp['vote']} vs {outcome}) | +{profit:.0f}.-")
                     delta['perf_change'] = {'type': 'win'}
                     st.session_state['streak_count'] += 1
+                    st.session_state['current_profit_thb'] += profit
+                    delta['profit_change'] = profit
+                    st.session_state['last_big_miss'] = False
                 else:
                     stats['losses'] += 1
-                    stats['history'].append(f"❌ Loss ({lp['vote']} vs {outcome})")
+                    stats['history'].append(f"❌ Loss ({lp['vote']} vs {outcome}) | -{bet:.0f}.-")
                     delta['perf_change'] = {'type': 'loss'}
                     st.session_state['streak_count'] = 0
+                    st.session_state['current_profit_thb'] -= bet
+                    delta['profit_change'] = -bet
+                    # Check for "Big Miss" (Risk Protection)
+                    if lp['score'] >= 4.5:
+                        st.session_state['last_big_miss'] = True
+                        delta['big_miss_set'] = True
             else:
                 stats['history'].append(f"⚪ Skip (Score {lp['score']})")
                 delta['perf_change'] = {'type': 'skip'}
@@ -279,81 +239,126 @@ with col1:
             for name, change in delta.get('module_changes', {}).items():
                 st.session_state['module_performance'][name] -= change
             
-            if delta.get('module_stats_update'):
-                 # Revert logic for stats is complex, for now we just skip or simple revert if possible
-                 # To do it properly we needed to save previous state, but for this version simplified:
-                 # We will just accept that undoing might not perfectly revert "Total/Win" counts 
-                 # to save complexity, or we can just pop the last action context if we stored it.
-                 pass # Placeholder as full revert requires storing more state
             st.session_state['streak_count'] = delta['prev_streak']
             pc = delta.get('perf_change')
             if pc:
-                if pc['type'] == 'win': st.session_state['ai_performance']['wins'] -= 1
-                elif pc['type'] == 'loss': st.session_state['ai_performance']['losses'] -= 1
-                if st.session_state['ai_performance']['history']: st.session_state['ai_performance']['history'].pop()
+                if pc['type'] == 'win': 
+                    st.session_state['ai_performance']['wins'] -= 1
+                    st.session_state['current_profit_thb'] -= delta.get('profit_change', 0)
+                elif pc['type'] == 'loss': 
+                    st.session_state['ai_performance']['losses'] -= 1
+                    st.session_state['current_profit_thb'] -= delta.get('profit_change', 0)
+                
+                # Restore previous big miss state correctly
+                st.session_state['last_big_miss'] = delta.get('prev_big_miss', False)
+                
+                if st.session_state['ai_performance']['history']: 
+                    st.session_state['ai_performance']['history'].pop()
+            
+            # Revert detailed stats
+            for mod, changes in delta.get('module_stats_changes', {}).items():
+                st.session_state['module_stats'][mod]['total'] -= 1
+                if changes['win']: st.session_state['module_stats'][mod]['wins'] -= 1
+                st.session_state['module_stats'][mod]['score'] -= changes['score']
 
-    if c1.button("🔵 PLAYER", use_container_width=True):
-        st.session_state['current_game'].append(0)
-        update_learning(0)
-        # Smart Sync: โหลดข้อมูลใหม่เฉพาะตาที่สำคัญ (15, 30, 50) 
-        # และเพิ่มกรณีที่ยังไม่ได้เทรนเลยเพื่อให้ระบบเริ่มทำงานได้
-        curr_len = len(st.session_state['current_game'])
-        needs_init = 'models' not in st.session_state and curr_len >= 15
-        if st.session_state.get('auto_train') and (curr_len in [15, 30, 50] or needs_init):
-            trigger_training()
-        st.rerun()
-    if c2.button("🔴 BANKER", use_container_width=True):
-        st.session_state['current_game'].append(1)
-        update_learning(1)
-        curr_len = len(st.session_state['current_game'])
-        needs_init = 'models' not in st.session_state and curr_len >= 15
-        if st.session_state.get('auto_train') and (curr_len in [15, 30, 50] or needs_init):
-            trigger_training()
-        st.rerun()
-    if c3.button("🟢 TIE", use_container_width=True):
-        st.session_state['current_game'].append(2)
-        update_learning(2)
-        curr_len = len(st.session_state['current_game'])
-        needs_init = 'models' not in st.session_state and curr_len >= 15
-        if st.session_state.get('auto_train') and (curr_len in [15, 30, 50] or needs_init):
-            trigger_training()
-        st.rerun()
-    if c4.button("ลบ", type="primary"):
-        undo_last_action()
-        # ไม่ต้อง auto-sync ตอนลบเพื่อความเร็ว
-        st.rerun()
+    st.divider()
+    st.subheader("🎨 ตั้งค่าสีตาราง")
+    theme_choice = st.radio("Theme", ["ตารางสีมืด 🌙", "ตารางสีสว่าง ☀️"], index=1, horizontal=True, label_visibility="collapsed")
+    st.session_state['theme'] = 'dark' if "ตารางสีมืด" in theme_choice else 'light'
+    
+    st.divider()
+    st.header("💰 4. โปรไฟล์การลงทุน")
+    # ใช้ key เพื่อให้ Streamlit จัดการ session_state อัตโนมัติ (จะช่วยให้ปุ่ม + / - ตอบสนองทันที)
+    st.number_input("ทุนเริ่มต้น (บาท)", key='capital_thb', step=100.0)
+    st.number_input("เป้าหมายกำไร (บาท)", key='target_profit_thb', step=100.0)
+    st.number_input("เดิมพันขั้นต่ำ (บาท)", key='min_bet_thb', step=10.0)
+    
+    risk_choice = st.selectbox("ระดับความเสี่ยง", ["เน้นปลอดภัย (Safe)", "สายสมดุล (Balanced)", "สายซิ่ง (Aggressive)"], index=1)
+    urgency_choice = st.selectbox("สถานะเงิน", ["เงินเย็น (ใจนิ่ง)", "ร้อนเงิน (ต้องชัวร์)"], index=0)
+    
+    st.session_state['risk_level_choice'] = risk_choice
+    st.session_state['urgency_choice'] = urgency_choice
+
+    # Manual Profit Adjustment
+    with st.expander("🛠️ ปรับแก้กำไร/ขาดทุน"):
+        # ใช้ value ปกติสำหรับช่องกรอกที่ไม่ได้ต้องการ sync อัตโนมัติทุกลมหายใจ (ต้องการกด Save)
+        new_profit = st.number_input("กำไรปัจจุบัน (บาท)", key='temp_profit_adj', value=float(st.session_state['current_profit_thb']), step=10.0)
+        if st.button("💾 บันทึกยอดเงินใหม่", use_container_width=True):
+            st.session_state['current_profit_thb'] = new_profit
+            st.success("อัปเดตยอดเงินเรียบร้อย")
+            st.rerun()
+
+    st.divider()
+    if 'models' in st.session_state:
+        st.info(f"Data: {st.session_state['data_count']} samples")
+        if st.session_state.get('trained_with_context'):
+            st.success("🎯 **โหมด : วิเคราะห์เจาะจงห้องล่าสุด**")
+        else:
+            st.caption("🌐 โหมด : วิเคราะห์รวมจากสถิติทั้งหมด")
+    else:
+        st.warning("⚠️ กรุณากดเทรนก่อน")
+
+col1, col2 = st.columns([1.8, 1])
+
+# CSS for Dashboard Style
+st.markdown("""
+<style>
+    [data-testid="column"] { min-width: 0 !important; }
+    /* Default Button Styling */
+    .stButton > button { height: 62px; font-size: 18px !important; font-weight: bold !important; border-radius: 12px !important; transition: all 1.3s ease; }
+    
+    /* Sidebar Primary (Start/Train) -> Blue */
+    [data-testid="stSidebar"] button[kind="primary"] { background-color: #2196F3 !important; color: white !important; border: none !important; }
+
+    /* Main Area Primary (Delete/Undo) -> Red */
+    [data-testid="stMain"] button[kind="primary"] { background-color: #d32f2f !important; color: white !important; border: 1px solid #ff1744 !important; }
+    [data-testid="stMain"] button[kind="primary"]:hover { background-color: #ff1744 !important; box-shadow: 0 0 20px rgba(255,23,68,0.5) !important; }
+    
+    .expert-emoji { font-size: 24px; margin-bottom: 5px; }
+    .expert-label { font-size: 13px; color: #aaa; margin-top: 2px; }
+    .expert-value { font-size: 18px; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
+
+with col1:
+    # --- Top Header: Profit & Performance ---
+    if 'ai_performance' in st.session_state:
+        # Show Profit bar first
+        show_profit_progress(st.session_state['current_profit_thb'], st.session_state['target_profit_thb'])
+        
+        # Show Win/Loss stats bar
+        stats = st.session_state['ai_performance']
+        curr_game = st.session_state.get('current_game', [])
+        p_pct, b_pct = 50, 50
+        if curr_game:
+            total_g = len(curr_game)
+            p_pct = curr_game.count(0) / total_g * 100
+            b_pct = curr_game.count(1) / total_g * 100
+        show_performance_dashboard(stats, st.session_state['streak_count'], p_pct, b_pct)
+
+    st.markdown("### 📊 เค้าไพ่หลัก")
+    if 'current_game' not in st.session_state:
+        st.session_state['current_game'] = []
+    
+    current_theme = st.session_state.get('theme', 'dark')
+    st.markdown(render_big_road(st.session_state['current_game'], theme=current_theme), unsafe_allow_html=True)
+    
+    with st.expander("📝 บันทึกประวัติล่าขอน"):
+        if 'ai_performance' in st.session_state:
+            stats = st.session_state['ai_performance']
+            for log in list(reversed(stats['history']))[:10]:
+                st.caption(log)
+        st.markdown(render_raw_data(st.session_state['current_game']), unsafe_allow_html=True)
 
 with col2:
-    st.subheader("🔮 3. สภาเซียน")
-    mod_perf = st.session_state.get('module_performance')
-    if mod_perf:
-        with st.expander("📈 ซ่อน/แสดง คะแนนความอึดเซียนรายสำนัก"):
-            item_html = ""
-            emojis = {'historian': '📜', 'technician': '🛣️', 'statistician': '🧠', 'booster': '⚡', 'expert': '🎲', 'neural_net': '🧬'}
-            name_map = {'historian': 'จำทางไพ่', 'technician': 'อ่านสามเกลอ', 'statistician': 'สถิติรวม', 'booster': 'วิเคราะห์', 'expert': 'สูตรเด็ด', 'neural_net': 'โครงข่ายสมองกล'}
-            for k, v in mod_perf.items():
-                color = "#4CAF50" if v > 0 else ("#f44336" if v < 0 else "#888")
-                item_html += (
-                    f'<div class="flex-item">'
-                    f'<div class="expert-emoji">{emojis.get(k)}</div>'
-                    f'<div class="expert-value" style="color:{color};">{v:+d}</div>'
-                    f'<div class="expert-label">{name_map.get(k)}</div>'
-                    f'</div>'
-                )
-            
-            st.markdown(f'<div class="flex-container">{item_html}</div>', unsafe_allow_html=True)
-        st.divider()
-
-    # --- Validation & Shoe Type Panel ---
-    shoe_type = get_shoe_type(st.session_state['current_game'])
-    if 'module_stats' in st.session_state:
-        show_validation_panel(st.session_state['module_stats'], shoe_type)
-    st.divider()
+    st.markdown("### 🎮 กรอกผลไพ่")
     
+    # --- Prediction & Advice (The Core) ---
     if 'models' in st.session_state and len(st.session_state['current_game']) >= 5:
         try:
-            # เพิ่ม pattern_sequences เข้าไปใน predict เพื่อคำนวณสถิติ
-            prediction, score, vote_details, pat_stats = ensemble_predict(
+            # Predict
+            mod_perf = st.session_state.get('module_performance')
+            prediction, score, vote_details, pat_stats, consensus = ensemble_predict(
                 st.session_state['current_game'], 
                 st.session_state['models'], 
                 module_performance=mod_perf,
@@ -361,22 +366,60 @@ with col2:
             )
             
             if prediction is not None:
-                mapping = {0: "🔵 PLAYER", 1: "🔴 BANKER", 2: "🟢 TIE", 3: "⏸️ รอไพ่ (SKIP)"}
+                # Calculate Advice
+                bet_amount, advice_txt = calculate_dog_oh_advice(
+                    st.session_state['capital_thb'],
+                    st.session_state['target_profit_thb'],
+                    st.session_state['current_profit_thb'],
+                    st.session_state.get('risk_level_choice', 'สายสมดุล (Balanced)'),
+                    st.session_state.get('urgency_choice', 'เงินเย็น (ใจนิ่ง)'),
+                    score,
+                    consensus,
+                    st.session_state.get('last_big_miss', False),
+                    st.session_state.get('min_bet_thb', 10.0)
+                )
+                st.session_state['last_bet_amount'] = bet_amount
+                
+                # Show Advice Card (Big Text)
+                show_financial_advice_card(
+                    bet_amount, 
+                    advice_txt, 
+                    st.session_state.get('risk_level_choice', 'Balanced'),
+                    st.session_state.get('urgency_choice', 'Cool')
+                )
+                
+                # Big Action Buttons right under the advice
+                st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
+                mapping = {0: "🔵 PLAYER", 1: "🔴 BANKER", 2: "🟢 TIE", 3: "WAIT"}
                 result_text = mapping.get(prediction, "รอผล")
                 
-                # แสดงสถิติย้อนหลัง (Pattern Stats)
-                if pat_stats:
-                    st.markdown(f"📊 **สถิติขอนที่นิสัยเหมือนห้องนี้** (เคยพบ {pat_stats['total']} ครั้ง)")
-                    stat_col1, stat_col2 = st.columns(2)
-                    with stat_col1:
-                        st.markdown(f"<div style='text-align:center;'><span style='color:#2196F3; font-size:12px;'>Player</span><br><span style='font-size:20px; font-weight:bold;'>{pat_stats['p_rate']:.0f}%</span></div>", unsafe_allow_html=True)
-                    with stat_col2:
-                        st.markdown(f"<div style='text-align:center;'><span style='color:#f44336; font-size:12px;'>Banker</span><br><span style='font-size:20px; font-weight:bold;'>{pat_stats['b_rate']:.0f}%</span></div>", unsafe_allow_html=True)
-                    st.divider()
-
-                with st.expander("🎯 ดูตารางเจาะลึกการวิเคราะห์โหวต"):
+                btn_c1, btn_c2 = st.columns(2)
+                if btn_c1.button("🔵 PLAYER", key="p_main", use_container_width=True):
+                    st.session_state['current_game'].append(0)
+                    update_learning(0)
+                    st.rerun()
+                if btn_c2.button("🔴 BANKER", key="b_main", use_container_width=True):
+                    st.session_state['current_game'].append(1)
+                    update_learning(1)
+                    st.rerun()
+                
+                btn_c3, btn_c4 = st.columns(2)
+                with btn_c3:
+                    if st.button("🟢 TIE", key="t_main", use_container_width=True):
+                        st.session_state['current_game'].append(2)
+                        update_learning(2)
+                        st.rerun()
+                with btn_c4:
+                    if st.button("🗑️ ลบ", key="del_main", use_container_width=True, type="primary"):
+                        undo_last_action()
+                        st.rerun()
+                
+                st.session_state['last_prediction'] = {'vote': prediction, 'score': score}
+                st.session_state['last_vote_details'] = vote_details
+                
+                # Show Stats / Experts in expanders below
+                with st.expander("🧬 รายละเอียดความเห็นเซียน"):
                     v_html = '<div style="background:rgba(255,255,255,0.05); padding:12px; border-radius:10px; margin-bottom:10px; border:1px solid #444;">'
-                    
                     for mod_name, m in vote_details.items():
                         if not m: continue
                         vote_val = m.get('vote', 'N/A')
@@ -407,10 +450,49 @@ with col2:
                 
                 st.session_state['last_prediction'] = {'vote': prediction, 'score': score}
                 st.session_state['last_vote_details'] = vote_details
+                
+                # --- Dog-Oh Financial Advisor Integration ---
+                bet_amount, advice_txt = calculate_dog_oh_advice(
+                    st.session_state['capital_thb'],
+                    st.session_state['target_profit_thb'],
+                    st.session_state['current_profit_thb'],
+                    st.session_state.get('risk_level_choice', 'สายสมดุล (Balanced)'),
+                    st.session_state.get('urgency_choice', 'เงินเย็น (ใจนิ่ง)'),
+                    score,
+                    # Pass consensus count if added to logic (we added it as 5th return)
+                    vote_details.get('consensus', 0) # Fallback if not updated
+                )
+                
+                # Wait, ensemble_predict return signature changed, need to handle index
+                # prediction, score, vote_details, pat_stats, consensus_count = ensemble_predict(...)
+                # but currently called as 4 return values in code. Let me fix the call.
+            
+            # (Self-correction: I need to fix the ensemble_predict call line 332 first)
         except Exception as e:
             st.error(f"Error: {e}")
     else:
-        st.info("รอข้อมูล (อย่างน้อย 5 ตา)")
+        st.info("💡 รอข้อมูลไพ่ครบ 5 ตาเพื่อเริ่มวิเคราะห์ (AI จะเริ่มทำงานอัตโนมัติ)")
+        
+        btn_c1, btn_c2 = st.columns(2)
+        if btn_c1.button("🔵 PLAYER", key="p_init", use_container_width=True):
+            st.session_state['current_game'].append(0)
+            update_learning(0)
+            st.rerun()
+        if btn_c2.button("🔴 BANKER", key="b_init", use_container_width=True):
+            st.session_state['current_game'].append(1)
+            update_learning(1)
+            st.rerun()
+        
+        btn_c3, btn_c4 = st.columns(2)
+        with btn_c3:
+            if st.button("🟢 TIE", key="t_init", use_container_width=True):
+                st.session_state['current_game'].append(2)
+                update_learning(2)
+                st.rerun()
+        with btn_c4:
+            if st.button("🗑️ ลบ", key="del_init", use_container_width=True, type="primary"):
+                undo_last_action()
+                st.rerun()
 
 st.divider()
 
