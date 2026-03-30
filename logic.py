@@ -8,6 +8,8 @@ from sklearn.neighbors import KNeighborsClassifier
 from xgboost import XGBClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import cross_val_predict
 from utils import (
     calculate_streak, 
     calculate_tie_stats, 
@@ -514,9 +516,13 @@ def train_ensemble_models(df, pattern_sequences):
         X = df.drop(columns=['target'])
         y = df['target']
         
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        models['scaler'] = scaler
+        
         # Module C: Random Forest (Statistician)
-        rf_model = RandomForestClassifier(n_estimators=150, max_depth=7, random_state=42)
-        rf_model.fit(X, y)
+        rf_model = RandomForestClassifier(n_estimators=150, max_depth=7, random_state=42, class_weight='balanced')
+        rf_model.fit(X_scaled, y)
         models['rf'] = rf_model
         models['rf_features'] = list(X.columns)
         
@@ -536,7 +542,7 @@ def train_ensemble_models(df, pattern_sequences):
                 random_state=42,
                 verbosity=0
             )
-            xgb_model.fit(X, y)
+            xgb_model.fit(X_scaled, y)
             models['xgb'] = xgb_model
         except Exception as e:
             print(f"ฝึกสูตรล้มเหลว: {e}")
@@ -544,16 +550,16 @@ def train_ensemble_models(df, pattern_sequences):
         # ส่วนที่ 5: โครงข่ายประสาทเทียม (MLP / Neural Network) - Reduced size
         try:
             mlp_model = MLPClassifier(hidden_layer_sizes=(16, 8), max_iter=500, random_state=42)
-            mlp_model.fit(X, y)
+            mlp_model.fit(X_scaled, y)
             models['mlp'] = mlp_model
         except Exception as e:
             print(f"ฝึก MLP ล้มเหลว: {e}")
 
-        # Meta-Model (Stacking Classifier)
+        # Meta-Model (Stacking Classifier using CV)
         try:
-            rf_proba = models['rf'].predict_proba(X)
-            xgb_proba = models['xgb'].predict_proba(X) if 'xgb' in models else np.zeros((len(X), 3))
-            mlp_proba = models['mlp'].predict_proba(X) if 'mlp' in models else np.zeros((len(X), 3))
+            rf_proba = cross_val_predict(models['rf'], X_scaled, y, cv=5, method='predict_proba')
+            xgb_proba = cross_val_predict(models['xgb'], X_scaled, y, cv=5, method='predict_proba') if 'xgb' in models else np.zeros((len(X), 3))
+            mlp_proba = cross_val_predict(models['mlp'], X_scaled, y, cv=5, method='predict_proba') if 'mlp' in models else np.zeros((len(X), 3))
             
             X_meta = np.hstack((rf_proba, xgb_proba, mlp_proba))
             meta_model = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
@@ -693,13 +699,15 @@ def ensemble_predict(history, models, module_performance=None, st_session_state=
             'b_to_p': markov['b_to_p']
         }])
         
+        input_scaled = models['scaler'].transform(input_data) if 'scaler' in models else input_data
+        
         rf_proba = np.zeros((1, 3))
         xgb_proba = np.zeros((1, 3))
         mlp_proba = np.zeros((1, 3))
         
         # 1. Random Forest
-        rf_pred = models['rf'].predict(input_data)[0]
-        rf_proba = models['rf'].predict_proba(input_data)
+        rf_pred = models['rf'].predict(input_scaled)[0]
+        rf_proba = models['rf'].predict_proba(input_scaled)
         rf_conf = max(rf_proba[0]) * 100
         vote_text = 'PLAYER' if rf_pred == 0 else ('BANKER' if rf_pred == 1 else 'TIE')
         vote_details['สถิติ'] = {'vote': vote_text, 'conf': rf_conf, 'emoji': '🧠'}
@@ -707,8 +715,8 @@ def ensemble_predict(history, models, module_performance=None, st_session_state=
         # 2. XGBoost
         if 'xgb' in models:
             try:
-                xgb_pred = models['xgb'].predict(input_data)[0]
-                xgb_proba = models['xgb'].predict_proba(input_data)
+                xgb_pred = models['xgb'].predict(input_scaled)[0]
+                xgb_proba = models['xgb'].predict_proba(input_scaled)
                 xgb_conf = max(xgb_proba[0]) * 100
                 xgb_vote_text = 'PLAYER' if xgb_pred == 0 else ('BANKER' if xgb_pred == 1 else 'TIE')
                 vote_details['วิเคราะห์'] = {'vote': xgb_vote_text, 'conf': xgb_conf, 'emoji': '⚡'}
@@ -718,8 +726,8 @@ def ensemble_predict(history, models, module_performance=None, st_session_state=
         # 3. MLP (Neural Network)
         if 'mlp' in models:
             try:
-                mlp_pred = models['mlp'].predict(input_data)[0]
-                mlp_proba = models['mlp'].predict_proba(input_data)
+                mlp_pred = models['mlp'].predict(input_scaled)[0]
+                mlp_proba = models['mlp'].predict_proba(input_scaled)
                 mlp_conf = max(mlp_proba[0]) * 100
                 mlp_vote_text = 'PLAYER' if mlp_pred == 0 else ('BANKER' if mlp_pred == 1 else 'TIE')
                 vote_details['โครงข่ายประสาท'] = {'vote': mlp_vote_text, 'conf': mlp_conf, 'emoji': '🧬'}
@@ -822,63 +830,122 @@ def ensemble_predict(history, models, module_performance=None, st_session_state=
 
     return final_prediction, max_v, vote_details, pat_stats, consensus_count
 
-def calculate_dog_oh_advice(capital, target_profit, current_profit, risk_level, urgency, score, consensus, last_big_miss=False, min_bet=10.0):
+def snap_to_chip(amount, min_bet=10):
     """
-    กุนซือการเงินด๊อกโอ: คำนวณยอดเงินที่ควรแทงตามสภาพจิตใจและเป้าหมาย
+    ปัดเศษเงินให้ตรงกับชิปจริงในคาสิโนออนไลน์ และให้เป็นตัวเลขกลมๆ คลิกง่าย
+    เช่น หลักสิบลงท้ายด้วย 0, หลักร้อยปัดทีละ 50 หรือ 100
     """
+    if amount < min_bet:
+        return min_bet
+        
+    if amount <= 100:
+        # หลักสิบ ปัดให้เป็นสูตรคูณของ 10
+        return max(min_bet, round(amount / 10) * 10)
+    elif amount <= 500:
+        # หลักร้อยต้น ปัดให้เป็นสูตรคูณของ 50 (เช่น 150, 200, 250)
+        return round(amount / 50) * 50
+    else:
+        # ยอดใหญ่ ปัดให้เป็นสูตรคูณของ 100 (เช่น 600, 700, 1000)
+        return round(amount / 100) * 100
+
+def calculate_dog_oh_advice(capital, target_profit, current_profit, risk_level, urgency, score, consensus, ai_streak=0, last_big_miss=False, min_bet=10.0):
+    """
+    กุนซือการเงินด๊อกโอ: คำนวณยอดเงินที่ควรแทงตามสภาพจิตใจ เป้าหมาย และ โหมดกู้ชีพ (Loss Recovery)
+    """
+    current_balance = capital + current_profit
+    
     if current_profit >= target_profit:
         return 0, "💰 ภารกิจสำเร็จ! ถึงเป้าหมายแล้ว แนะนำให้ถอนเงินและเลิกเล่นทันทีครับ"
         
-    # Stop Loss Check (ระบบป้องกันการล้างพอร์ต)
-    if current_profit <= -capital:
-        return 0, "⚠️ ขณะนี้คุณได้หมดตูดแล้ว พอเลิ๊ก"
+    # Stop Loss Check ป้องกันการแทงจนติดลบเกินทุน
+    if current_balance <= 0:
+        return 0, "⚠️ พอร์ตแตกแล้ว (Balance = 0)! ขาดทุนเต็มเพดาน ระบบสั่งหยุดการทำงานเพื่อเซฟเงินครับ"
     
-    # 1. คำนวณหน่วยพื้นฐาน (Base Unit)
-    # เงินร้อน = 1% ของทุน, เงินเย็น = 2-3% ของทุน
-    unit_pct = 0.01 if urgency == "ร้อนเงิน (ต้องชัวร์)" else 0.02
+    if current_balance < min_bet:
+        return 0, "⚠️ ยอดเงินปัจจุบันเหลือน้อยกว่าขั้นต่ำที่จะแทงได้ แนะนำให้พอแค่นี้ครับ"
+    
+    # 1. Base Unit calculation (5% ของทุนปัจจุบันถ้า < 1000, 2% ถ้าทุนหนา)
+    unit_pct = 0.05 if capital < 1000 else 0.02
+    if urgency == "ร้อนเงิน (ต้องชัวร์)": unit_pct *= 0.7
     if risk_level == "สายซิ่ง (Aggressive)": unit_pct *= 1.5
-    elif risk_level == "เน้นปลอดภัย (Safe)": unit_pct *= 0.7
+    elif risk_level == "เน้นปลอดภัย (Safe)": unit_pct *= 0.5
     
-    base_unit = max(min_bet, capital * unit_pct) # ใช้ขั้นต่ำจากค่าที่ส่งมา
+    base_unit = max(min_bet, capital * unit_pct)
     
-    # 2. Reality Check (เคยพลาดยับมาไหม?)
+    # 2. Reality Check (เพิ่งเสียหนักมา ห้ามหัวร้อนทบ สั่ง skip)
     if last_big_miss:
-        return 0, "🚨 ตาที่แล้วเราชัวร์มากแต่พลาด! กุนซือแนะนำให้ 'หยุดพัก' (Skip) 1 ตาเพื่อดึงสติครับ"
+        return 0, "🚨 ตาที่แล้วพลาดไม้ใหญ่! กฎเหล็กกู้ชีพคือ 'หยุดพัก' (Skip) 1 ตาเพื่อรอดูทรงไพ่ (ห้ามหัวร้อน)"
 
-    # 3. ตัดสินใจตามความมั่นใจ (Score & Consensus)
-    # ต้องมั่นใจระดับหนึ่งถึงจะให้แทง
-    entry_threshold = 3.5 if urgency == "ร้อนเงิน (ต้องชัวร์)" else 3.0
+    # 3. ตรวจสอบโหมดกู้ชีพ (Loss Recovery Mode)
+    in_recovery_mode = current_profit < 0
     
-    if score < entry_threshold:
-        return 0, f"⏸️ ความมั่นใจ {score:.1f} ยังไม่ถึงเกณฑ์ {entry_threshold} กุนซือแนะนำให้รอก่อนครับ"
+    if in_recovery_mode:
+        # โหมดกู้ชีพ: ซุ่มยิง เน้นชัวร์เท่านั้น
+        if score < 4.0:
+            return 0, f"🛡️ [โหมดกู้ชีพ] ความมั่นใจ {score:.1f} ต่ำไป กุนซือแนะนำให้ 'รอไพ่' (Skip) เพื่อเซฟทุนครับ"
+        if ai_streak == 0:
+            return 0, f"🛡️ [โหมดกู้ชีพ] เซียนเพิ่งทายพลาดไป รอให้ตีบวกถูกสัก 1 ตาก่อนค่อยสวนเงินครับ"
+    else:
+        # โหมดเก็บกำไรปกติ
+        entry_threshold = 3.5 if urgency == "ร้อนเงิน (ต้องชัวร์)" else 2.5
+        if score < entry_threshold:
+            return 0, f"⏸️ ความมั่นใจ {score:.1f} ต่ำเกินไป ด๊อกโอขอให้ผ่านครับ"
     
-    # คำนวณยอดเงิน
-    bet_amount = base_unit
-    advice_text = "✅ จังหวะกำลังดี ลงเบาๆ 1 หน่วยครับ"
-    
-    # มั่นใจมาก + ทุกคนเห็นตรงกัน (High Consensus)
+    # 4. Dynamic Paroli / Pressing based on ai_streak (ทบเมื่อชนะ เพื่อทำกำไรรวดเร็ว)
+    multiplier = 1.0
+    if ai_streak == 1:
+        multiplier = 1.5
+    elif ai_streak == 2:
+        multiplier = 2.0
+    elif ai_streak >= 3:
+        multiplier = 3.0 # Maximum pressing during hot streak
+        
+    # 5. Score Factor
+    score_multiplier = 1.0
     if score >= 4.5 and consensus >= 3:
-        if risk_level != "เน้นปลอดภัย (Safe)":
-            bet_amount = base_unit * 2
-            advice_text = "🔥 มั่นใจสูงมาก! และเซียนเห็นตรงกัน แนะนำลง 2 หน่วยครับ"
-        else:
-            bet_amount = base_unit * 1.5
-            advice_text = "🛡️ มั่นใจสูง! แต่คุณเน้นปลอดภัย กุนซือแนะนำลงแค่ 1.5 หน่วยพอครับ"
-
-    # มั่นใจสุดขีด (Dog-Oh Special)
+        score_multiplier = 1.5
     if score >= 5.5 and consensus >= 4:
-         if urgency != "ร้อนเงิน (ต้องชัวร์)":
-             bet_amount = base_unit * 3
-             advice_text = "🚀 **ไม้เด็ดด๊อกโอ!** เซียนทุกคนพร้อมใจกันโหวต แนะนำฉวยโอกาสนี้ครับ"
-         else:
-             bet_amount = base_unit * 2
-             advice_text = "⚠️ มั่นใจสุดแต่คุณร้อนเงิน! กุนซือขอจำกัดไว้ที่ 2 หน่วยเพื่อความปลอดภัยครับ"
-
-    # ปรับให้เป็นเลขกลมๆ (หลักสิบ)
-    bet_amount = round(bet_amount / 10) * 10
+        score_multiplier = 2.0
+        
+    bet_amount = base_unit * multiplier * score_multiplier
     
-    # ตรวจสอบ Stop Loss
-    if current_profit <= -(capital * 0.3): # ขาดทุนเกิน 30%
-        return 0, "😱 ทุนลดลงเกิน 30% แล้ว! กุนซือขอสั่งให้ 'เลิกเล่น' ทันทีเพื่อรักษาทุนที่เหลือครับ"
+    # โหมดกู้ชีพ จะใช้วิธีดึงทุนคืนทีละ 1/3 เพื่อไม่ให้ Overtrade
+    if in_recovery_mode:
+        recovery_bet = max(min_bet, abs(current_profit) / 3)
+        # เลือกค่าที่ปลอดภัยที่สุดระหว่างไม้ปกติหรือไม้กู้ชีพ
+        bet_amount = min(bet_amount, recovery_bet)
+        
+    # 6. Max allowed bet per hand to protect capital
+    max_bet = capital * 0.25
+    bet_amount = min(max_bet, bet_amount)
+    
+    # 7. บังคับไม่ให้แทงเกินเงินทุนที่มีอยู่จริงตอนนี้ (ป้องกันยอดติดลบทะลุโลก)
+    bet_amount = min(bet_amount, current_balance)
+    
+    # 8. ปัดเศษชิปตามคาสิโนจริง
+    bet_amount = snap_to_chip(bet_amount, min_bet)
+    
+    # เช็คก๊อกสุดท้าย ถ้าปัดเศษแล้วเกินทุน ให้อัดหมดหน้าตักที่มี (แต่ต้องมากกว่าขั้นต่ำ)
+    if bet_amount > current_balance:
+        bet_amount = snap_to_chip(current_balance, min_bet)
+
+    # Generating correct advice text
+    if in_recovery_mode:
+        advice_text = "🛡️ [โหมดกู้ชีพ] กราฟเริ่มเข้าทาง ยิงไม้กู้คืนแบบปลอดภัย"
+        if score >= 5.0:
+            advice_text = "🎯 [โหมดกู้ชีพ + ไม้เด็ด] โอกาสทองมาแล้ว ทวงเงินคืน!"
+    else:
+        advice_text = "✅ จังหวะดี ความเสี่ยงต่ำ ลงเบาๆ 1 อัตรา"
+        if ai_streak >= 3:
+            advice_text = "🔥 ระบบกำลังไหลลื่น! อัดกำไรสู้ตามสูตรทบไม้ (Paroli)"
+        elif ai_streak >= 1:
+            advice_text = "✨ กราฟกำลังมา ด๊อกโอแนะนำเพิ่มน้ำหนักเดิมพันบวกกำไร"
+        elif score >= 5.0:
+            advice_text = "🚀 **ไม้เด็ดด๊อกโอ!** โอกาสทองที่เซียนทุกสายโหวตตรงกัน ใส่เต็มรอบนี้"
+        elif not urgency == "ร้อนเงิน (ต้องชัวร์)":
+            advice_text = "🛡️ เดินเงินขั้นต่ำตามระบบ"
+
+    if current_profit <= -(capital * 0.4) and in_recovery_mode:
+        advice_text = "⚠️ [วิกฤต] ทุนลดลงหนักมาก! โปรดแทงอย่างระมัดระวังที่สุด " + advice_text
 
     return bet_amount, advice_text

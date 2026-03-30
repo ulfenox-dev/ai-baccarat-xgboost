@@ -368,15 +368,16 @@ with col2:
             if prediction is not None:
                 # Calculate Advice
                 bet_amount, advice_txt = calculate_dog_oh_advice(
-                    st.session_state['capital_thb'],
-                    st.session_state['target_profit_thb'],
-                    st.session_state['current_profit_thb'],
-                    st.session_state.get('risk_level_choice', 'สายสมดุล (Balanced)'),
-                    st.session_state.get('urgency_choice', 'เงินเย็น (ใจนิ่ง)'),
-                    score,
-                    consensus,
-                    st.session_state.get('last_big_miss', False),
-                    st.session_state.get('min_bet_thb', 10.0)
+                    capital=st.session_state['capital_thb'],
+                    target_profit=st.session_state['target_profit_thb'],
+                    current_profit=st.session_state['current_profit_thb'],
+                    risk_level=st.session_state.get('risk_level_choice', 'สายสมดุล (Balanced)'),
+                    urgency=st.session_state.get('urgency_choice', 'เงินเย็น (ใจนิ่ง)'),
+                    score=score,
+                    consensus=consensus,
+                    ai_streak=st.session_state.get('streak_count', 0),
+                    last_big_miss=st.session_state.get('last_big_miss', False),
+                    min_bet=st.session_state.get('min_bet_thb', 10.0)
                 )
                 st.session_state['last_bet_amount'] = bet_amount
                 
@@ -451,23 +452,7 @@ with col2:
                 st.session_state['last_prediction'] = {'vote': prediction, 'score': score}
                 st.session_state['last_vote_details'] = vote_details
                 
-                # --- Dog-Oh Financial Advisor Integration ---
-                bet_amount, advice_txt = calculate_dog_oh_advice(
-                    st.session_state['capital_thb'],
-                    st.session_state['target_profit_thb'],
-                    st.session_state['current_profit_thb'],
-                    st.session_state.get('risk_level_choice', 'สายสมดุล (Balanced)'),
-                    st.session_state.get('urgency_choice', 'เงินเย็น (ใจนิ่ง)'),
-                    score,
-                    # Pass consensus count if added to logic (we added it as 5th return)
-                    vote_details.get('consensus', 0) # Fallback if not updated
-                )
-                
-                # Wait, ensemble_predict return signature changed, need to handle index
-                # prediction, score, vote_details, pat_stats, consensus_count = ensemble_predict(...)
-                # but currently called as 4 return values in code. Let me fix the call.
-            
-            # (Self-correction: I need to fix the ensemble_predict call line 332 first)
+
         except Exception as e:
             st.error(f"Error: {e}")
     else:
